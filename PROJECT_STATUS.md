@@ -25,7 +25,7 @@ Statusdatum: 2026-08-27
 - [in progress] Geanonimiseerde control- en Magic-wirefixtures maken
 - [todo] Standalone Go controlclient
 - [in progress] Standalone Go Magic-handshake en tunnel: `internal/magic.Dial` voegt discovery, relay-open en tokencrypto samen tot een byte-transparante `net.Conn` (getest tegen een in-memory relay); nog nodig: validatie tegen een echte relay en 5GenCare-inputs
-- [in progress] Tunnelvalidatie tegen de echte relay met geëxtraheerde live-credentials (Go `Dial` → `app`/relay-open/tokencrypto → RTSP-respons door de tunnel)
+- [done] Tunnelvalidatie tegen de echte relay met geëxtraheerde live-credentials: `cmd/tunnelcheck` bewijst dat productie de afgeleide `magicUuid` + `app`-discovery accepteert. Stream haakt niet aan zonder 5GenCare-autorisatie (relay houdt de sessie open, maar geen camera-peer; EOF pas bij eerste data, ook met actieve camera/5s wachttijd)
 - [todo] Lokale RTSP-validatie zonder Android
 - [todo] go2rtc-integratie
 - [todo] Home Assistant add-on

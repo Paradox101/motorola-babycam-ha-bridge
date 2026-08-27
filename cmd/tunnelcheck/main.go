@@ -31,15 +31,17 @@ type creds struct {
 func main() {
 	credsPath := flag.String("creds", "runtime-logs/creds/creds.json", "path to the local credentials JSON")
 	timeout := flag.Duration("timeout", 15*time.Second, "overall timeout")
+	readonly := flag.Bool("readonly", false, "after relay-open, only read (no OPTIONS) to see if the relay holds the session open")
+	predelay := flag.Duration("predelay", 0, "wait this long after relay-open before sending OPTIONS")
 	flag.Parse()
 
-	if err := run(*credsPath, *timeout); err != nil {
+	if err := run(*credsPath, *timeout, *readonly, *predelay); err != nil {
 		fmt.Fprintln(os.Stderr, "FAIL:", err)
 		os.Exit(1)
 	}
 }
 
-func run(credsPath string, timeout time.Duration) error {
+func run(credsPath string, timeout time.Duration, readonly bool, predelay time.Duration) error {
 	raw, err := os.ReadFile(credsPath)
 	if err != nil {
 		return fmt.Errorf("read creds: %w", err)
@@ -85,6 +87,24 @@ func run(credsPath string, timeout time.Duration) error {
 		r.ConnectionNumber, r.StreamHost, r.ControlHost, r.TargetPort, r.Mode)
 	fmt.Printf("    relay stream : %s:%d\n", r.StreamHost, magic.RelayStreamPort)
 
+	if readonly {
+		fmt.Println("[2] readonly probe: waiting for the relay/camera to send or close...")
+		tunnel.SetReadDeadline(time.Now().Add(timeout))
+		buf := make([]byte, 4096)
+		start := time.Now()
+		n, err := tunnel.Read(buf)
+		elapsed := time.Since(start).Round(time.Millisecond)
+		if err != nil {
+			return fmt.Errorf("readonly after %s: %w", elapsed, err)
+		}
+		fmt.Printf("    relay sent %d bytes after %s (session held open)\n", n, elapsed)
+		return nil
+	}
+
+	if predelay > 0 {
+		fmt.Printf("    waiting %s after relay-open for camera to attach...\n", predelay)
+		time.Sleep(predelay)
+	}
 	fmt.Println("[2] sending RTSP OPTIONS through the token tunnel...")
 	request := fmt.Sprintf("OPTIONS rtsp://%s/owner/streaming RTSP/1.0\r\nCSeq: 1\r\nUser-Agent: tunnelcheck\r\n\r\n", c.ControlHost)
 	tunnel.SetWriteDeadline(time.Now().Add(timeout))
