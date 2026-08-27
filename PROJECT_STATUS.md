@@ -8,7 +8,8 @@ Statusdatum: 2026-08-27
 - [done] Tijdelijke loopback-RTSP op dynamische poort bevestigd
 - [done] Magic P2P `WEB2` relaymodus bevestigd
 - [done] Actieve Dart FFI → `libdevconn.so` route geïdentificeerd
-- [in progress] 5GenCare controlprotocol: framing en commando-serialisatie reconstrueren
+- [blocked] 5GenCare controlprotocol reconstrueren: op de x86-emulator niet met x86-Frida te capturen (app-libs zijn ARMv7 achter native-bridge; conscrypt droeg alleen Google/Firebase). Vereist ARM-omgeving; zie `docs/missing-protocol-pieces.md`
+- [done] Live Magic-credentials (device id, SID, device-token, control-host, afgeleide magicUuid) uit app-opslag geëxtraheerd via `adb root` voor tunnelvalidatie (lokaal, git-ignored)
 - [done] Magic WEB2: wireprotocol (discovery, relay-open, tokencrypto-tunnel) reconstrueren; exacte callback-ABI blijft deels open maar niet-blokkerend
 - [done] Magic steady-state flows 9901/2288/3388 en versleutelde/ingekapselde dataplane bevestigd
 - [done] Magic connect/handshake-pcap bij app-herstart vastgelegd
@@ -24,6 +25,7 @@ Statusdatum: 2026-08-27
 - [in progress] Geanonimiseerde control- en Magic-wirefixtures maken
 - [todo] Standalone Go controlclient
 - [in progress] Standalone Go Magic-handshake en tunnel: `internal/magic.Dial` voegt discovery, relay-open en tokencrypto samen tot een byte-transparante `net.Conn` (getest tegen een in-memory relay); nog nodig: validatie tegen een echte relay en 5GenCare-inputs
+- [in progress] Tunnelvalidatie tegen de echte relay met geëxtraheerde live-credentials (Go `Dial` → `app`/relay-open/tokencrypto → RTSP-respons door de tunnel)
 - [todo] Lokale RTSP-validatie zonder Android
 - [todo] go2rtc-integratie
 - [todo] Home Assistant add-on
