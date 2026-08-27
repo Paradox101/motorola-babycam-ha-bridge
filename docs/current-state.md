@@ -36,6 +36,11 @@ Statusdatum: 2026-08-27. Dit document scheidt waarnemingen strikt in **PROVEN**,
 - Audio en video startten en de app registreerde `magic_p2p_streaming_succeeded`.
 - Een steady-state pcap bewees gescheiden externe flows op 9901 (bulkstream), 2288 (48/52-byte controlrecords) en 3388 (TLS-control). De relaystream bevatte geen plaintext RTSP-markers en had hoge entropie.
 - De sessie gebruikte `vrelay-de0.5gen.care` en externe TCP-connecties; er was geen zichtbare directe socket naar het camera-LAN-adres.
+- De volledige TCP/9901-capture is offline gedecodeerd met de device-token en de uit `libdevconn.so` gereconstrueerde stateful transformatie. De plaintext bevat de complete RTSP/Digest/SDP/RTP-over-TCP-dialoog.
+- De camera levert door de tunnel H.264-video (`camera`) en PCMA/8000-audio (`micphone`).
+- Een verse app-start-capture (2026-08-27) legde het plaintext `app`-controlrequest én -response op TCP/8800 vast. De response is de achtveldenvariant; `num`, `streamHost` en `directIp` correleren byte-perfect met respectievelijk het relay-open connectionnummer, de 9901-tunnelbestemming en de mislukte directe poging. Het laatste veld is de connection mode (2 = WEB2).
+- De Go-controlketen is met live-credentials (uit app-opslag, `adb root`) gevalideerd tegen de **echte** relay: de relay accepteert de afgeleide `magicUuid` en beantwoordt de `app`-discovery met een geldige achtveldenrespons. De relay houdt de stream-sessie na relay-open open, maar er koppelt **geen camera-peer** aan een onafhankelijk opgezette sessie — zelfs niet met de camera actief streamend of met 5 s wachttijd. De stream-`EOF` treedt pas op bij de eerste tunneldata. Camera-attachment vereist dus 5GenCare-side autorisatie/signalering.
+- `generate_sid_v1` is exact gereconstrueerd; de afgeleide `magicUuid` matcht de runtimewaarde zonder dat de validator secrets toont.
 - Control-login gebruikt een blijvende command-socket. Runtime-responsevoorbeelden beginnen logisch met `v3_login`; een eerste shard-response `-6` verwees de client door naar een genummerde `*.moto.5gencare.com` host.
 - De app verkreeg een account/master-ID, twee tokenachtige waarden en een session-ID in de succesvolle `v3_login`-response. Waarden zijn hier bewust niet opgenomen.
 
@@ -58,12 +63,10 @@ Statusdatum: 2026-08-27. Dit document scheidt waarnemingen strikt in **PROVEN**,
 
 ### Magic WEB2
 
-- Exact C-prototype van `magicp2p_connect_device_v1` en callbackstructuren.
-- Relaypoortselectie, handshakebytes, berichtframing en versievelden.
-- Device-authenticatie, challenge/response en eventuele key derivation.
-- Cipher, sleutel, IV/nonce en welke delen van de tunnel versleuteld zijn.
-- Keepalive-, reconnect-, open-port- en close-port-wireberichten.
-- De lokale zijde is RTSP-byteverkeer; de externe WEB2-zijde is aantoonbaar niet plaintext RTSP en vereist decapsulatie/decryptie.
+- ~~Runtime-invulling van het voorafgaande Magic `app ...` controlresponse op controlpoort 8800 en de semantiek van het laatste achtveldenveld.~~ **Opgelost (capture 2026-08-27):** achtveldenvariant runtime-bewezen; laatste veld = connection mode (2 = WEB2). Zie `docs/magic-web2-protocol.md` en `internal/magic/control_discovery.go`.
+- Foutcodes en alternatieve direct/LAN-controlresponses (kortere responsevormen nog niet gecaptured).
+- Reconnect- en closegedrag bij een verbroken relay.
+- Callbackstructuren zijn nog niet volledig getypeerd, maar blokkeren de native Go-route niet meer.
 
 ## Actieve callchain
 
@@ -80,4 +83,10 @@ CameraModel.findMagicP2PPort / _findPort (Dart AOT, libapp.so)
 
 ## Exact ontbrekende onderdeel voor een Android-loze tunnel
 
-De cloudparameters voor één bekende sessie zijn zichtbaar, maar een Linux-client kan nog niet verbinden omdat het **Magic WEB2 relay-wireprotocol** onbekend is: vanaf TCP-connect tot en met device-authenticatie, tunnel-open voor targetpoort 6667 en keepalive. Daarnaast is voor een zelfstandig product de control-wireflow nodig om verse SID/device-token/accessToken/relayparameters te verkrijgen. Dit zijn twee afzonderlijke protocolgrenzen; beide moeten worden bewezen voordat een werkende bridge kan worden gebouwd.
+De volledige Magic WEB2-controlketen is nu bewezen en in Go gecodeerd: `app`-discovery (`control_discovery.go`), `magicUuid` (`identity.go`), relay-open frame (`relay_open.go`) en de device-tokencrypto-tunnel (`token_crypto.go`). Relayselectie en alle responsevelden zijn per capture 2026-08-27 bevestigd.
+
+Het enige resterende blok voor een zelfstandige Android-loze tunnel is de **5GenCare-controlflow**: zonder bestaande app moeten verse SID, device-token, stream-accessToken en relayparameters worden verkregen en vernieuwd.
+
+Een capture-experiment op 2026-08-27 heeft definitief vastgesteld dat deze flow **niet** met x86-Frida te observeren is: de app draait als 32-bit `app_process32` (x86) terwijl `libapp.so`/`libflutter.so`/`libdevconn.so` ARMv7 zijn en via de native-bridge lopen — onzichtbaar voor de x86-agent. Een directe `SSL_read`/`SSL_write`-dump op de enige zichtbare TLS-stack (conscrypt `libssl.so`) toonde in een volledig startupvenster uitsluitend Google/Firebase-verkeer. 5GenCare-plaintext vereist daarom een ARM-omgeving (native Frida op Flutter-BoringSSL).
+
+Dat 5GenCare het ontbrekende stuk is, is bovendien positief bevestigd door de tunnelvalidatie (`cmd/tunnelcheck`): met de echte, uit de app-opslag geëxtraheerde credentials accepteert de productie-relay de complete Magic-controlketen, maar de camera streamt pas na 5GenCare-side autorisatie. De Magic-transportlaag is daarmee bewezen correct; het ontbrekende stuk is uitsluitend de 5GenCare-controlflow die een verse, geautoriseerde sessie (SID/device-token/stream-accessToken) opzet en de camera signaleert.

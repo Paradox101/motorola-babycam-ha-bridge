@@ -22,7 +22,8 @@ public class ExportNamedFunctions extends GhidraScript {
         "token_crypto_encode", "token_crypto_decode", "token_crypto_send",
         "token_crypto_receive", "crypto_auth_hmacsha256",
         "magic_nwk_connect_send", "magic_nwk_socket_connect",
-        "relay_thread", "relay_header", "FUN_000162dc", "FUN_00018144", "FUN_000195cc",
+        "relay_thread", "relay_header", "FUN_000162dc", "FUN_000171bc", "FUN_000172a4",
+        "FUN_00017cf0", "FUN_00018144", "FUN_000195cc",
         "magic_crypt_hash", "magic_crypt_encode", "magic_crypt_decode",
         "FUN_00021530", "FUN_00020f4c", "FUN_00021898", "FUN_000218b8",
         "FUN_00021918", "FUN_00021628", "generate_sid_v1"
