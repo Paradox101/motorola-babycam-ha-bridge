@@ -1,0 +1,36 @@
+# ABI: armeabi-v7a (config.armeabi_v7a.apk)
+# size-bytes  filename  role
+20120156  libapp.so  Flutter/Dart AOT application; contains 5GenCare protocol and camera orchestration
+8678240   libavcodec_neon.so  FFmpeg codecs, NEON build
+8447144   libavcodec.so  FFmpeg codecs
+45836     libavdevice_neon.so  FFmpeg devices, NEON build
+45420     libavdevice.so  FFmpeg devices
+2587376   libavfilter_neon.so  FFmpeg filters, NEON build
+2592240   libavfilter.so  FFmpeg filters
+2083140   libavformat_neon.so  FFmpeg demux/protocols incl. RTSP, NEON build
+2081844   libavformat.so  FFmpeg demux/protocols incl. RTSP
+454460    libavutil_neon.so  FFmpeg utilities, NEON build
+457788    libavutil.so  FFmpeg utilities
+76840     libdartjni.so  Dart/Android JNI helper
+4416      libdatastore_shared_counter.so  AndroidX datastore helper
+75836     libdevconn.so  Device connectivity JNI helper
+16988     libffmpegkit_abidetect.so  FFmpegKit ABI detection
+461028    libffmpegkit_armv7a_neon.so  FFmpegKit JNI, NEON build
+460884    libffmpegkit.so  FFmpegKit JNI
+7926848   libflutter.so  Flutter engine
+7824688   libijkffmpeg.so  IJKPlayer FFmpeg fork
+363396    libijkplayer.so  IJKPlayer playback JNI
+214712    libijksdl.so  IJKPlayer SDL/platform layer
+171968    libmp3lame.so  LAME MP3 codec
+5108480   liborbwebm2m.so  Orbweb proprietary M2M P2P/NAT traversal/relay SDK
+70652     libswresample_neon.so  FFmpeg resampling, NEON build
+68236     libswresample.so  FFmpeg resampling
+510748    libswscale_neon.so  FFmpeg scaling, NEON build
+505140    libswscale.so  FFmpeg scaling
+
+# Notable liborbwebm2m.so evidence
+# JNI: Java_com_orbweb_m2m_TunnelAPIs_*
+# Internals: CSTUNUDP, CSTUNTCPEx, CTcpRelayConnection, CP2PProxy,
+# ConnTunnelClient/Server, direct/UDP/TCP/relay tunnel types, AES key exchange.
+# No WebRTC or MQTT implementation was identified.
+

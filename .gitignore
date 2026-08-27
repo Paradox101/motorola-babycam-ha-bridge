@@ -1,0 +1,31 @@
+runtime-logs/
+*.db
+*.pcap
+*.pcapng
+secrets*
+.env
+credentials*
+.gocache/
+.gopath/
+tools/go1.27.0/
+tools/go1.27.0.windows-amd64.zip
+
+# Vendor applications, extracted code, native binaries, and analysis databases
+*.apk
+*.xapk
+*.so
+*.zip
+analysis/apktool-*/
+analysis/jadx*/
+analysis/xapk/
+analysis/ghidra-projects/
+analysis/libdevconn-decompiled.txt
+analysis/libdevconn-strings.txt
+
+# Downloaded third-party toolchains (keep our own scripts under tools/)
+tools/android-command-line/
+tools/blutter/
+tools/frida-server/
+tools/gh-*/
+tools/ghidra-*/
+tools/jdk-*/

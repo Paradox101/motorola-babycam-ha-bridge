@@ -1,0 +1,31 @@
+# Flutter/Dart AOT symbols (source path/function names retained in libapp.so)
+package:fepe_core/src/utils/socket_data_handler.dart :: SocketDataHandler, loginV3Handler, sessionV3Handler, dlistHandler, getValueHandler, setValueHandler
+package:fepe_device/src/models/camera_model.dart :: CameraModel._getPlayerURL, _getStreamUrl, _startStream, _handleStreamError, connectDeviceV1, findMagicP2PPort
+package:fepe_device/src/device_internal.dart :: DeviceInternal, getDevices, loginV3, loginSet, sessionV3
+package:fepe_device/src/models/device_model.dart :: DeviceModel/online status/capabilities
+package:fepeapp/ui/home/widget/camera_livestream_tool.dart :: CameraLiveStreamTool/ViewModel
+package:fepeapp/ui/dashboard_camera_widget/dashboard_camera_view_model.dart :: camera selection/live-view orchestration
+package:fepeapp/ui/camera_setting/camera_setting_motion/camera_setting_motion_view_model.dart :: motion settings
+package:fepeapp/ui/camera_setting/camera_setting_sound/camera_setting_sound_view_model.dart :: sound settings
+package:fepeapp/ui/camera_setting/camera_setting_temperature/camera_setting_temperature_view_model.dart :: temperature settings
+package:fepeapp/ui/camera_setting/camera_setting_name/camera_setting_name_view_model.dart :: rename device
+package:fepeapp/ui/camera_setting/camera_setting_smart_zone/camera_setting_smart_zone_view_model.dart :: smart zones
+package:fepeapp/ui/camera_setting/camera_setting_tf_card/camera_setting_tf_card_view_model.dart :: SD-card playback
+package:fepeapp/ui/camera_lullaby/play_lullaby/play_lullaby_view_model.dart :: lullaby control
+package:fepeapp/utils/camera_event_util.dart :: motion/temperature/camera event parsing
+
+# Decompiled Android/Java SDK bridge
+com.orbweb.liborbwebiot.OrbwebM2MSDK :: setRDZDomain, setupDomainAddress, getHost/getIP
+com.orbweb.liborbwebiot.OrbwebP2PManager :: CreateP2PManagerFromID, ConnectWithAuth, MapPort, CGI_GetRTSPInfo
+com.orbweb.m2m.P2PManager :: StartConnectHost, StartPortMapping, getLocalPort
+com.orbweb.m2m.TunnelAPIs :: native startConnClient/startClientLan/addClientPortMapping
+com.orbweb.m2m.ORBConnectObject :: HTTPS rendezvous /api/device/connection
+com.orbweb.libm2m.manager.M2MDeviceManager :: camera P2P/LAN connection manager
+com.orbweb.libm2m.manager.DeviceApi :: getRTSPPoint/getLocalPort/getSID/getP2PType
+com.orbweb.liborbwebiot.CGIRtspInfo :: AliveUrls/MAX_Channels/STATUS
+com.orbweb.libcmdservice.CMDConnect :: proprietary local TCP command channel
+com.orbweb.libcmdservice.PushTalk :: two-way AAC/PCM audio over mapped TCP socket
+com.orbweb.libcmdservice.HttpREQTask :: HTTP request to 127.0.0.1 mapped port
+com.fivegencare.fepe_magic_p2p.FepeMagicP2pPlugin :: Flutter plugin stub
+com.five.gen.care.chillaxbaby.MainActivity :: launcher Flutter activity
+
