@@ -14,11 +14,18 @@ Unknown:
 
 Needed runtime observation:
 
-- Pre- en post-TLS `connect`, `send`/`recv`, `SSL_write`/`SSL_read` met socketcorrelatie, richting, lengte, timing en veilige redactie.
+- Pre- en post-TLS `send`/`recv`/`SSL_write`/`SSL_read` van de 5GenCare-controlsocket, met richting, lengte en veilige redactie.
+
+Captureresultaat (2026-08-27, definitief):
+
+- De app draait als 32-bit `app_process32` (x86); `libapp.so`/`libflutter.so`/`libdevconn.so` zijn ARMv7 en lopen via de native-bridge. x86-Frida ziet deze modules **niet** (`Process.findModuleByName` = null) en kan hun functies niet hooken.
+- Directe `SSL_read`/`SSL_write`-dump op de enige zichtbare TLS-stack (conscrypt `libssl.so`, x86) toonde in een volledig startupvenster **uitsluitend** Google/Firebase/RevenueCat-verkeer — geen enkele 5GenCare-frame.
+- De 5GenCare-control-TLS en het volledige Magic-protocol lopen dus ARM-side. Alleen `tcpdump` ziet ze; Magic is plaintext (bruikbaar), 5GenCare is TLS-ciphertext (niet te ontsleutelen zonder ARM-side keys).
+- Gevolg: 5GenCare-plaintext vereist een **ARM-omgeving** (arm64/armeabi-AVD of fysiek toestel) waar Frida native de Flutter-BoringSSL kan hooken (`SSL_read`/`SSL_write`-dump of keylog-callback). Diagnosescripts: `scripts/frida_ssl_probe.js`, `scripts/frida_tls_dump.js`.
 
 Target function:
 
-- Dart `SocketImplement`/`SocketDataHandler`; native `connect`, `send`, `recv`, `SSL_write`, `SSL_read` waar zichtbaar.
+- Op ARM: Flutter-BoringSSL `SSL_read`/`SSL_write` in `libflutter.so`/`libapp.so`; Dart `SocketImplement`/`SocketDataHandler`.
 
 Expected output:
 
