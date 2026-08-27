@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -28,6 +29,7 @@ type relayCamera struct {
 	listener net.Listener
 	token    string
 	backend  string // address of the plaintext camera backend
+	wg       sync.WaitGroup
 }
 
 func newRelayCamera(t *testing.T, token, backend string) *relayCamera {
@@ -37,7 +39,13 @@ func newRelayCamera(t *testing.T, token, backend string) *relayCamera {
 		t.Fatal(err)
 	}
 	rc := &relayCamera{listener: listener, token: token, backend: backend}
-	t.Cleanup(func() { _ = listener.Close() })
+	// Close the listener and join every handler goroutine before the test's
+	// other cleanups finish, so none survives to log on a completed test.
+	t.Cleanup(func() {
+		_ = listener.Close()
+		rc.wg.Wait()
+	})
+	rc.wg.Add(1)
 	go rc.serve(t)
 	return rc
 }
@@ -49,12 +57,17 @@ func (rc *relayCamera) dial(_ context.Context, _, _ string) (net.Conn, error) {
 }
 
 func (rc *relayCamera) serve(t *testing.T) {
+	defer rc.wg.Done()
 	for {
 		conn, err := rc.listener.Accept()
 		if err != nil {
 			return
 		}
-		go rc.handleControlOrStream(t, conn)
+		rc.wg.Add(1)
+		go func() {
+			defer rc.wg.Done()
+			rc.handleControlOrStream(t, conn)
+		}()
 	}
 }
 
@@ -120,10 +133,12 @@ func (rc *relayCamera) handleStream(t *testing.T, conn net.Conn, reader *bufio.R
 	}
 	defer backend.Close()
 
-	done := make(chan struct{}, 2)
+	var inner sync.WaitGroup
+	inner.Add(2)
 	// relay -> backend: decode ciphertext, forward plaintext.
 	go func() {
-		defer func() { done <- struct{}{} }()
+		defer inner.Done()
+		defer backend.Close() // unblock the other direction
 		for {
 			m, err := reader.Read(buf)
 			if m > 0 {
@@ -144,7 +159,8 @@ func (rc *relayCamera) handleStream(t *testing.T, conn net.Conn, reader *bufio.R
 	}()
 	// backend -> relay: encode plaintext toward the bridge.
 	go func() {
-		defer func() { done <- struct{}{} }()
+		defer inner.Done()
+		defer conn.Close() // unblock the other direction
 		b := make([]byte, 4096)
 		for {
 			m, err := backend.Read(b)
@@ -162,7 +178,7 @@ func (rc *relayCamera) handleStream(t *testing.T, conn net.Conn, reader *bufio.R
 			}
 		}
 	}()
-	<-done
+	inner.Wait()
 }
 
 // readRelayOpenFrame reads exactly one relay-open frame from r, using its fixed

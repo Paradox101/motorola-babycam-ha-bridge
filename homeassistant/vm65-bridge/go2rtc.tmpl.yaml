@@ -1,0 +1,16 @@
+# Rendered by run.sh from the add-on options. %PLACEHOLDERS% are substituted.
+streams:
+  vm65:
+    - "rtsp://%RTSP_USER%:%RTSP_PASSWORD%@127.0.0.1:8554/owner/streaming?accessToken=%ACCESS_TOKEN%#rtsp/tcp#backchannel=0"
+
+api:
+  listen: ":1984"
+
+rtsp:
+  listen: ":8555"
+
+webrtc:
+  listen: ":8556"
+
+log:
+  level: info

@@ -1,0 +1,43 @@
+# Compose the vm65-bridge tunnel with go2rtc.
+#
+#   1. Put your credentials in ./creds.json (see creds.example.json). Never
+#      commit it: the repo .gitignore already excludes runtime-logs, keep this
+#      file out of git too.
+#   2. Fill the placeholders in go2rtc.yaml with the RTSP user/password and
+#      accessToken.
+#   3. docker compose up --build
+#
+# go2rtc's web UI is then on http://localhost:1984 and the stream is named
+# "vm65".
+#
+# Note: the tunnel only carries video once a valid 5GenCare-authorized session
+# exists (fresh SID / device token / accessToken). Obtaining those is out of
+# scope for this stack; see ../../docs/missing-protocol-pieces.md.
+
+services:
+  bridge:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    command: ["-listen", "0.0.0.0:8554", "-status", "0.0.0.0:8555", "-creds", "/data/creds.json"]
+    volumes:
+      - ./creds.json:/data/creds.json:ro
+    expose:
+      - "8554"
+    healthcheck:
+      # Static binary on scratch has no shell; rely on go2rtc's stream retry
+      # instead. The /status endpoint is available for external monitoring.
+      disable: true
+    restart: unless-stopped
+
+  go2rtc:
+    image: alexxit/go2rtc:latest
+    depends_on:
+      - bridge
+    volumes:
+      - ./go2rtc.yaml:/config/go2rtc.yaml:ro
+    ports:
+      - "1984:1984"   # web UI / API
+      - "8555:8555"   # go2rtc RTSP republish (host port -> container 8555)
+      - "8556:8556"   # webrtc
+    restart: unless-stopped

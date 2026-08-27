@@ -17,9 +17,11 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/local/motorola-vm65-bridge/internal/bridge"
 )
@@ -38,6 +40,7 @@ type credsFile struct {
 func main() {
 	listen := flag.String("listen", "127.0.0.1:8554", "local address to expose the camera on (loopback recommended)")
 	credsPath := flag.String("creds", "runtime-logs/creds/creds.json", "path to the local credentials JSON (never committed)")
+	statusAddr := flag.String("status", "", "optional address for the JSON health endpoint (e.g. 127.0.0.1:8555); empty disables it")
 	verbose := flag.Bool("v", false, "verbose (debug) logging")
 	flag.Parse()
 
@@ -47,13 +50,13 @@ func main() {
 	}
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
 
-	if err := run(*listen, *credsPath, logger); err != nil {
+	if err := run(*listen, *credsPath, *statusAddr, logger); err != nil {
 		logger.Error("bridge exited with error", "err", err)
 		os.Exit(1)
 	}
 }
 
-func run(listen, credsPath string, logger *slog.Logger) error {
+func run(listen, credsPath, statusAddr string, logger *slog.Logger) error {
 	creds, err := loadCreds(credsPath)
 	if err != nil {
 		return err
@@ -67,12 +70,37 @@ func run(listen, credsPath string, logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	// Bind now so the health endpoint reports the real address immediately.
+	if err := b.Listen(); err != nil {
+		return err
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	if statusAddr != "" {
+		startHealthServer(ctx, statusAddr, b, logger)
+	}
+
 	logger.Info("starting vm65-bridge", "listen", listen, "control_host", creds.ControlHost)
 	return b.Serve(ctx)
+}
+
+// startHealthServer runs the JSON health endpoint until ctx is cancelled.
+func startHealthServer(ctx context.Context, addr string, b *bridge.Bridge, logger *slog.Logger) {
+	srv := &http.Server{Addr: addr, Handler: b.HealthHandler()}
+	go func() {
+		<-ctx.Done()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		_ = srv.Shutdown(shutdownCtx)
+	}()
+	go func() {
+		logger.Info("health endpoint listening", "addr", addr)
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			logger.Error("health endpoint failed", "err", err)
+		}
+	}()
 }
 
 func loadCreds(path string) (bridge.Credentials, error) {

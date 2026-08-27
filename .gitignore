@@ -33,3 +33,9 @@ tools/jdk-*/
 # Python bytecode
 __pycache__/
 *.pyc
+
+# Go build artifacts
+/dist/
+/vm65-bridge
+# Local credentials for the go2rtc compose stack
+deploy/go2rtc/creds.json

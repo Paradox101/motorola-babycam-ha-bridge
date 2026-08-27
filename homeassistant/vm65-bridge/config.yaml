@@ -1,0 +1,48 @@
+name: Motorola VM65 Bridge
+version: "0.1.0"
+slug: vm65_bridge
+description: >-
+  Tunnels a Motorola VM65 baby monitor through the reconstructed Magic WEB2
+  relay and republishes it with go2rtc for Home Assistant. Requires camera
+  credentials obtained out-of-band (see the add-on docs).
+url: https://github.com/Paradox101/motorola-vm65-bridge
+arch:
+  - amd64
+  - aarch64
+init: false
+startup: application
+boot: manual
+ports:
+  1984/tcp: 1984
+  8555/tcp: 8555
+  8556/tcp: 8556
+  8556/udp: 8556
+ports_description:
+  1984/tcp: go2rtc web UI / API
+  8555/tcp: go2rtc RTSP republish
+  8556/tcp: WebRTC (TCP)
+  8556/udp: WebRTC (UDP)
+watchdog: "http://[HOST]:[PORT:1984]/api/streams"
+webui: "http://[HOST]:[PORT:1984]/"
+map:
+  - share:rw
+options:
+  device_id: 0
+  sid: ""
+  device_token: ""
+  control_host: "vrelay-de0.5gen.care"
+  control_port: 8800
+  target_port: 6667
+  rtsp_user: ""
+  rtsp_password: ""
+  access_token: ""
+schema:
+  device_id: int(0,)
+  sid: str
+  device_token: password
+  control_host: str
+  control_port: port
+  target_port: port
+  rtsp_user: str
+  rtsp_password: password
+  access_token: password
