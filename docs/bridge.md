@@ -61,8 +61,27 @@ go build ./cmd/vm65-bridge
 ```
 
 Bind to loopback: the tunnel carries an unauthenticated RTSP stream. Use `-v`
-for debug logging. The process shuts down cleanly on SIGINT/SIGTERM, closing
-the listener and every live tunnel.
+for debug logging, and `-status 127.0.0.1:8555` to expose a JSON health endpoint
+(session counters + bound address) for a watchdog. The process shuts down
+cleanly on SIGINT/SIGTERM, closing the listener and every live tunnel.
+
+## Resilience and diagnostics
+
+Each client connection opens its own relay session, retried with exponential
+backoff on transient failures (`bridge.Config.DialRetries` / `DialBackoff`,
+defaults 2 attempts / 1s base). When a session opens but the camera never sends
+a byte — the exact signature of a relay session with no attached peer — the
+bridge emits a clear warning that a valid 5GenCare-authorized session is
+missing, rather than serving a silent empty stream.
+
+## Offline validation
+
+`internal/rtspmock` is a mock RTSP camera and client used to validate the whole
+local path with no Android and no live credentials. Its integration test drives
+a full session — OPTIONS, DESCRIBE, SETUP, PLAY with interleaved (binary) RTP,
+TEARDOWN — from a client, through the bridge and the real Magic WEB2 tunnel, to
+the mock camera, and asserts the SDP and every RTP payload arrive byte-exact.
+Run it with `go test ./internal/bridge`.
 
 ## go2rtc integration
 

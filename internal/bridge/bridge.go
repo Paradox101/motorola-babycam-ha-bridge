@@ -68,6 +68,15 @@ type Config struct {
 	// selects a 15s default. It does not limit stream lifetime.
 	DialTimeout time.Duration
 
+	// DialRetries is the number of extra attempts to open the relay after the
+	// first fails, per client connection. Zero selects a default of 2; a
+	// negative value disables retrying.
+	DialRetries int
+
+	// DialBackoff is the base wait between relay-open attempts; it doubles each
+	// attempt. Zero selects 1s.
+	DialBackoff time.Duration
+
 	// Logger receives structured lifecycle logs. Zero uses slog.Default.
 	Logger *slog.Logger
 
@@ -82,6 +91,8 @@ type Bridge struct {
 	cfg         Config
 	magicUUID   string
 	dialTimeout time.Duration
+	dialRetries int
+	dialBackoff time.Duration
 	log         *slog.Logger
 
 	listener net.Listener
@@ -111,6 +122,17 @@ func New(cfg Config) (*Bridge, error) {
 	if dialTimeout == 0 {
 		dialTimeout = 15 * time.Second
 	}
+	dialRetries := cfg.DialRetries
+	if dialRetries == 0 {
+		dialRetries = 2
+	}
+	if dialRetries < 0 {
+		dialRetries = 0
+	}
+	dialBackoff := cfg.DialBackoff
+	if dialBackoff == 0 {
+		dialBackoff = time.Second
+	}
 	log := cfg.Logger
 	if log == nil {
 		log = slog.Default()
@@ -119,6 +141,8 @@ func New(cfg Config) (*Bridge, error) {
 		cfg:         cfg,
 		magicUUID:   magicUUID,
 		dialTimeout: dialTimeout,
+		dialRetries: dialRetries,
+		dialBackoff: dialBackoff,
 		log:         log,
 		conns:       make(map[net.Conn]struct{}),
 	}, nil
@@ -239,17 +263,7 @@ func (b *Bridge) handle(ctx context.Context, client net.Conn) {
 		log.Info("client disconnected")
 	}()
 
-	dialCtx, cancel := context.WithTimeout(ctx, b.dialTimeout)
-	tunnel, err := magic.Dial(dialCtx, magic.TunnelConfig{
-		ControlHost: b.cfg.Credentials.ControlHost,
-		ControlPort: b.cfg.Credentials.ControlPort,
-		MagicUUID:   b.magicUUID,
-		TargetPort:  b.targetPort(),
-		SessionName: freshSessionName(),
-		DeviceToken: b.cfg.Credentials.DeviceToken,
-		Dial:        b.cfg.Dial,
-	})
-	cancel()
+	tunnel, err := b.dialWithRetry(ctx, log)
 	if err != nil {
 		log.Error("relay dial failed", "err", err)
 		return
@@ -272,26 +286,83 @@ func (b *Bridge) handle(ctx context.Context, client net.Conn) {
 		}
 	}()
 
-	pipe(client, tunnel, log)
+	fromClient, fromRelay := pipe(client, tunnel, log)
+	log.Info("relay session closed", "bytes_to_relay", fromClient, "bytes_from_camera", fromRelay)
+	// A session that opened but never carried a single camera byte is the exact
+	// signature of a relay session without an attached camera peer. In the wild
+	// this means the 5GenCare-authorized session is missing or expired; make
+	// that legible instead of a silent empty stream. Skipped on context cancel,
+	// where the empty read is our own shutdown.
+	if fromRelay == 0 && ctx.Err() == nil {
+		log.Warn("relay opened but camera sent no data; the camera did not attach. "+
+			"This is expected without a valid 5GenCare-authorized session "+
+			"(fresh SID / device token / stream accessToken). See docs/missing-protocol-pieces.md",
+			"bytes_to_relay", fromClient)
+	}
 }
 
-// pipe copies bytes in both directions until either side closes, then returns.
-func pipe(client net.Conn, tunnel *magic.Tunnel, log *slog.Logger) {
+// dialWithRetry opens a relay session, retrying transient failures with an
+// exponential backoff bounded by the outer context. Each attempt gets its own
+// dial timeout.
+func (b *Bridge) dialWithRetry(ctx context.Context, log *slog.Logger) (*magic.Tunnel, error) {
+	backoff := b.dialBackoff
+	var lastErr error
+	for attempt := 0; attempt <= b.dialRetries; attempt++ {
+		if attempt > 0 {
+			log.Warn("retrying relay dial", "attempt", attempt, "max", b.dialRetries, "prev_err", lastErr)
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(backoff):
+			}
+			backoff *= 2
+		}
+		dialCtx, cancel := context.WithTimeout(ctx, b.dialTimeout)
+		tunnel, err := magic.Dial(dialCtx, magic.TunnelConfig{
+			ControlHost: b.cfg.Credentials.ControlHost,
+			ControlPort: b.cfg.Credentials.ControlPort,
+			MagicUUID:   b.magicUUID,
+			TargetPort:  b.targetPort(),
+			SessionName: freshSessionName(),
+			DeviceToken: b.cfg.Credentials.DeviceToken,
+			Dial:        b.cfg.Dial,
+		})
+		cancel()
+		if err == nil {
+			return tunnel, nil
+		}
+		lastErr = err
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+	}
+	return nil, lastErr
+}
+
+// pipe copies bytes in both directions until either side closes, then returns
+// the number of bytes carried from the client to the relay and from the relay
+// (camera) back to the client.
+func pipe(client net.Conn, tunnel *magic.Tunnel, log *slog.Logger) (fromClient, fromRelay int64) {
 	var wg sync.WaitGroup
 	wg.Add(2)
 
-	copyDir := func(dst io.Writer, src io.Reader, dir string, closeDst func()) {
+	// Each goroutine writes only its own counter, exactly once; wg.Wait below
+	// establishes the happens-before edge for reading them.
+	copyDir := func(dst io.Writer, src io.Reader, dir string, count *int64, closeDst func()) {
 		defer wg.Done()
-		if _, err := io.Copy(dst, src); err != nil && !isExpectedClose(err) {
+		n, err := io.Copy(dst, src)
+		*count = n
+		if err != nil && !isExpectedClose(err) {
 			log.Debug("copy ended", "dir", dir, "err", err)
 		}
 		// Closing the destination unblocks the opposite direction's Read.
 		closeDst()
 	}
 
-	go copyDir(tunnel, client, "client->relay", func() { _ = tunnel.Close() })
-	go copyDir(client, tunnel, "relay->client", func() { _ = client.Close() })
+	go copyDir(tunnel, client, "client->relay", &fromClient, func() { _ = tunnel.Close() })
+	go copyDir(client, tunnel, "relay->client", &fromRelay, func() { _ = client.Close() })
 	wg.Wait()
+	return fromClient, fromRelay
 }
 
 func (b *Bridge) targetPort() int {
