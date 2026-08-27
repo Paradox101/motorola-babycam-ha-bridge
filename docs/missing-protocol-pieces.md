@@ -35,19 +35,19 @@ Known:
 - Het WEB2-openingsrequest naar TCP/9901 is 139 bytes plaintext met bewezen formatstring `v%03d %03d %05d %03d %s %04d %s`.
 - De gemeten invulling begint met `v002 034 06667 078`, gevolgd door een 78-byte identifier en een 36-byte identifier.
 - `relay_header` bouwt dit frame; `FUN_00018144` verzendt het via `magic_nwk_connect_send`.
+- `generate_sid_v1`, device-tokenbootstrap en de stateful relaytransformatie zijn exact gereconstrueerd en tegen de runtimecapture gevalideerd.
+- De volledige TCP/9901-capture decodeert naar geldige RTSP, SDP en interleaved RTP.
+- Voorafgaand relay-discoveryrequest: `app <magicUuid> <targetPort> 2 <sessionName>\n`; native default controlpoort 8800.
+- **PROVEN (capture 2026-08-27):** de `app`-controlresponse is de achtveldenvariant `app <num> <streamHost> <controlHost> <targetPort> <directIp> <directPort> <mode>`. `num` matcht het relay-open connectionnummer, `streamHost` matcht de 9901-tunnelbestemming, `directIp` matcht de mislukte directe poging, en het laatste veld is de **connection mode** (2 = WEB2). Go-codec: `internal/magic/control_discovery.go`.
 
 Unknown:
 
-- Relayrespons; exact functieprototype/callback-ABI; crypto, dataframing en keepalive. De openingsvelden zijn inmiddels gekoppeld aan protocolversie, connectionnummer, targetpoort, `magicUuid` en `sessionName`.
+- Foutvarianten, reconnectgedrag en de kortere (native bekende) responsevormen. Callback-ABI is nog onvolledig maar blokkeert een native Go-client niet.
 
-Needed runtime observation:
+Resterende runtime observation:
 
-- Functie-entry/callback met getypeerde argumenten; gelijktijdige pcap en plaintext socket-I/O aan de `libdevconn.so`-grens.
+- Een reconnect-/foutscenario voor de alternatieve responsevormen. Basiscapture (TCP/8800 + 9901 vanaf verse app-start) is gedaan: `runtime-logs/vm65-8800.pcap`.
 
 Target function:
 
-- `magicp2p_connect_device_v1`, `magicp2p_aio_data_send`, `magicp2p_aio_data_recv`, `connect`, `send`, `recv` en crypto-importcalls/callsites.
-
-Expected output:
-
-- Decode van de 130-byte relayrespons en een geanonimiseerde, geordende transcriptie van authenticatie → tunnel-ready → keepalive.
+- `FUN_00017cf0`, `magic_nwk_connect_to`, `magic_nwk_socket_send` en `magic_nwk_socket_recv_timeout` op de Magic-controlverbinding.
