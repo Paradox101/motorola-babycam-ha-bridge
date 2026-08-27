@@ -3,7 +3,10 @@ package magic
 import (
 	"bufio"
 	"context"
+	"io"
 	"net"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -71,13 +74,18 @@ func (r *fakeRelay) serve() {
 		return
 	}
 	defer stream.Close()
-	buf := make([]byte, 4096)
-	n, err := stream.Read(buf)
+	// Read exactly the relay-open frame. The client's first crypto write can
+	// coalesce with it in one TCP segment, so consume the frame at its precise
+	// length via a buffered reader and leave any surplus buffered for decode.
+	// A single stream.Read here would otherwise hand the surplus to
+	// ParseRelayOpen and fail, deadlocking the test on gotOpen.
+	reader := bufio.NewReader(stream)
+	frame, err := readOpenFrame(reader)
 	if err != nil {
 		r.fail(err)
 		return
 	}
-	open, err := ParseRelayOpen(buf[:n])
+	open, err := ParseRelayOpen(frame)
 	if err != nil {
 		r.fail(err)
 		return
@@ -95,8 +103,10 @@ func (r *fakeRelay) serve() {
 		return
 	}
 
-	// Read the client's first plaintext write (bootstrap + payload).
-	n, err = stream.Read(buf)
+	// Read the client's first plaintext write (bootstrap + payload) from the
+	// same buffered reader, so any coalesced surplus is included.
+	buf := make([]byte, 4096)
+	n, err := reader.Read(buf)
 	if err != nil {
 		r.fail(err)
 		return
@@ -190,4 +200,31 @@ func TestTunnelDialRejectsMissingToken(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for missing device token")
 	}
+}
+
+// readOpenFrame reads exactly one relay-open frame from r using its fixed header
+// widths and embedded length prefixes, leaving any trailing bytes buffered.
+// Frame: v<3>' '<3>' '<5>' '<mLen 3>' '<magic mLen>' '<sLen 4>' '<session sLen>.
+func readOpenFrame(r *bufio.Reader) ([]byte, error) {
+	header := make([]byte, 19) // through the 3-digit magic-UUID length + its space
+	if _, err := io.ReadFull(r, header); err != nil {
+		return nil, err
+	}
+	magicLen, err := strconv.Atoi(strings.TrimSpace(string(header[15:18])))
+	if err != nil {
+		return nil, err
+	}
+	mid := make([]byte, magicLen+6) // magicUUID + ' ' + 4-digit session length + ' '
+	if _, err := io.ReadFull(r, mid); err != nil {
+		return nil, err
+	}
+	sessionLen, err := strconv.Atoi(strings.TrimSpace(string(mid[magicLen+1 : magicLen+5])))
+	if err != nil {
+		return nil, err
+	}
+	session := make([]byte, sessionLen)
+	if _, err := io.ReadFull(r, session); err != nil {
+		return nil, err
+	}
+	return append(append(append([]byte{}, header...), mid...), session...), nil
 }
