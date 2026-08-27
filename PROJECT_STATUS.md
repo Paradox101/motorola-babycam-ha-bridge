@@ -23,7 +23,7 @@ Statusdatum: 2026-08-27
 - [done] Magic WEB2-controlketen (discovery/relay-open/tokencrypto) volledig in Go gecodeerd en getest
 - [in progress] Geanonimiseerde control- en Magic-wirefixtures maken
 - [todo] Standalone Go controlclient
-- [todo] Standalone Go Magic-handshake en tunnel
+- [in progress] Standalone Go Magic-handshake en tunnel: `internal/magic.Dial` voegt discovery, relay-open en tokencrypto samen tot een byte-transparante `net.Conn` (getest tegen een in-memory relay); nog nodig: validatie tegen een echte relay en 5GenCare-inputs
 - [todo] Lokale RTSP-validatie zonder Android
 - [todo] go2rtc-integratie
 - [todo] Home Assistant add-on
