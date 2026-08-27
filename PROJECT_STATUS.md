@@ -22,14 +22,16 @@ Statusdatum: 2026-08-27
 - [done] Geteste Go Magic UUID- en tokencrypto-implementaties met onafhankelijke fixtures
 - [done] Magic `app ...` controlrequest/-response op poort 8800 runtime vastgelegd; achtveldenvariant bewezen, laatste veld = connection mode (WEB2)
 - [done] Magic WEB2-controlketen (discovery/relay-open/tokencrypto) volledig in Go gecodeerd en getest
-- [in progress] Geanonimiseerde control- en Magic-wirefixtures maken
-- [todo] Standalone Go controlclient
+- [done] Geanonimiseerde Magic-wirefixtures gemaakt (zie golden fixtures hieronder)
+- [done] Standalone Go bridge-daemon `cmd/vm65-bridge`: bindt een lokale RTSP-over-TCP-poort en tunnelt elke clientverbinding byte-transparant via een eigen Magic WEB2-relaysessie (`internal/bridge`). Dit is exact de rol die de Android-app met zijn dynamische listenpoort (16667) speelt. Credentials komen uit hetzelfde lokale JSON-bestand als `tunnelcheck`. De 5GenCare-controlflow zit hier bewust niet in: de daemon krijgt de afgeleide inputs aangereikt en verzint/vernieuwt ze niet
 - [in progress] Standalone Go Magic-handshake en tunnel: `internal/magic.Dial` voegt discovery, relay-open en tokencrypto samen tot een byte-transparante `net.Conn` (getest tegen een in-memory relay); nog nodig: validatie tegen een echte relay en 5GenCare-inputs
 - [done] Tunnelvalidatie tegen de echte relay met geëxtraheerde live-credentials: `cmd/tunnelcheck` bewijst dat productie de afgeleide `magicUuid` + `app`-discovery accepteert. Stream haakt niet aan zonder 5GenCare-autorisatie (relay houdt de sessie open, maar geen camera-peer; EOF pas bij eerste data, ook met actieve camera/5s wachttijd)
-- [todo] Lokale RTSP-validatie zonder Android
-- [todo] go2rtc-integratie
-- [todo] Home Assistant add-on
-- [todo] amd64/aarch64 containerbuilds
-- [todo] End-to-end- en reconnectvalidatie
+- [done] Lokale RTSP-validatie zonder Android: `internal/rtspmock` (mock-camera + client) voert nu een **volledige** RTSP-sessie (OPTIONS→DESCRIBE→SETUP→PLAY met interleaved RTP→TEARDOWN) door de echte Magic WEB2-tunnel; de integratietest (`internal/bridge`) bewijst dat SDP én 12 high-entropy RTP-pakketten byte-exact aankomen. Plus een simpelere OPTIONS-round-trip. Race-detector-schoon, geen Android in de keten
+- [done] Reconnect + diagnostiek: de bridge doet dial-retry met exponentiële backoff (`DialRetries`/`DialBackoff`) en logt een expliciete, gelabelde diagnose voor het 'relay open maar geen camera-peer'-geval (nul camerabytes ⇒ ontbrekende 5GenCare-autorisatie). Beide getest
+- [done] Geanonimiseerde control- en Magic-wirefixtures: golden fixtures onder `internal/magic/testdata/` (app-request, achtveldenrespons, 139-byte relay-open) met round-trip-golden-test en `-update`-flag; puur synthetische placeholders, geen echte identiteit/secrets
+- [done] go2rtc-integratie: `deploy/go2rtc/` levert een go2rtc-config (`rtsp/tcp`-bron naar de bridge) plus een `docker-compose.yml` die bridge+go2rtc samen draait, en een JSON health-endpoint (`internal/bridge.HealthHandler`, `-status`-flag) voor monitoring. Validatie tegen een echte, 5GenCare-geautoriseerde sessie blijft nodig
+- [done] Home Assistant add-on: `homeassistant/vm65-bridge/` verpakt bridge+go2rtc (config.yaml, build.yaml, Dockerfile, bashio `run.sh`, DOCS). Watchdog haakt op de go2rtc-API. Credentials komen uit de add-on-opties; end-to-end blijft geblokkeerd op de 5GenCare-controlflow
+- [done] amd64/aarch64 containerbuilds: multi-stage `Dockerfile` (statische CGO-loze binary op scratch), `Makefile` (`dist`/`docker`-targets) en GitHub Actions CI (`.github/workflows/ci.yml`: gofmt/vet/`test -race`, cross-compile amd64+arm64, multi-arch buildx). Beide arch-binaries cross-compileren bewezen schoon
+- [todo] End-to-end- en reconnectvalidatie (tegen echte camera; geblokkeerd op de 5GenCare-controlflow)
 
-`done` betekent dat het betreffende feit daadwerkelijk statisch of tijdens de eigen VM65-sessie is bevestigd. De volledige Magic WEB2-controlketen is nu bewezen en in Go gecodeerd; het resterende blok voor een standalone tunnel is de 5GenCare-controlflow (TLS via ARM native-bridge, niet zichtbaar via x86-Frida). Er is nog geen standalone tunnel en dus nog geen functionele add-on.
+`done` betekent dat het betreffende feit daadwerkelijk statisch of tijdens de eigen VM65-sessie is bevestigd. De volledige Magic WEB2-controlketen is nu bewezen, in Go gecodeerd en verpakt in een standalone bridge-daemon (`cmd/vm65-bridge`) met een offline bewezen lokale RTSP-route. Het resterende blok voor een tegen een echte camera werkende tunnel is de 5GenCare-controlflow (TLS via ARM native-bridge, niet zichtbaar via x86-Frida): zonder verse, geautoriseerde SID/device-token/stream-accessToken haakt de camera niet aan. De transportlaag is compleet; de add-on wacht uitsluitend op die controlflow.
