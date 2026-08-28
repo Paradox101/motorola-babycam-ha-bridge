@@ -9,18 +9,20 @@ ARG GO_VERSION=1.27.0
 
 FROM golang:${GO_VERSION}-alpine AS build
 RUN apk add --no-cache git
-# Override to build a branch/tag/commit other than the default.
-ARG SOURCE_REF=v0.4.0
-# The release commit bumps this to the new tag, but the tag itself is pushed
-# afterwards. Until it exists every build fails here, and git's own message
-# ("Remote branch vX.Y.Z not found") does not say why or what to do — so say it.
+# The add-on builds from the release branch, not from a version tag. A tag can
+# only be created after the commit that names it, so pinning to one left every
+# build broken in the window between the release commit and the tag push. The
+# release branch always exists and is moved to the released commit, so this
+# value never changes and the build never depends on a ref that is not there
+# yet. Override to build another branch, tag or the default branch.
+ARG SOURCE_REF=release
 RUN git clone --depth 1 --branch "${SOURCE_REF}" \
         https://github.com/Paradox101/motorola-babycam-ha-bridge /src || { \
         echo "ERROR: '${SOURCE_REF}' does not exist in the repository."; \
-        echo "If this is a freshly released version, its tag was not pushed yet:"; \
-        echo "    git tag -a ${SOURCE_REF} -m 'Motorola Nursery Bridge ${SOURCE_REF#v}'"; \
-        echo "    git push origin ${SOURCE_REF}"; \
-        echo "To build before tagging, pass --build-arg SOURCE_REF=main."; \
+        echo "The add-on builds from the 'release' branch. Point it at the"; \
+        echo "released commit and push it:"; \
+        echo "    git push origin main:release"; \
+        echo "To build the default branch instead, pass --build-arg SOURCE_REF=main."; \
         exit 1; \
     }
 WORKDIR /src
