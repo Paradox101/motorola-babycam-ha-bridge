@@ -1,0 +1,32 @@
+# go2rtc configuration for a Motorola Nursery camera exposed through the
+# compatibility vm65-bridge command.
+#
+# vm65-bridge presents the camera as a plain RTSP-over-TCP endpoint on its
+# listen port. go2rtc consumes that endpoint like any other RTSP source and
+# re-publishes it as WebRTC / MSE / RTSP / snapshots for players and for
+# Home Assistant.
+#
+# Replace the placeholders with the values the app supplies to its own player:
+#   <rtsp-user>/<rtsp-password> : the RTSP credentials
+#   <access-token>             : the streaming accessToken (from the 5GenCare
+#                                device/control model, NOT from RTSP)
+# When bridge and go2rtc run in the same compose network, use the service name
+# "bridge"; for a host install use 127.0.0.1.
+
+streams:
+  vm65:
+    # #rtsp/tcp forces interleaved transport, matching how the app plays the
+    # tunnelled stream. #backchannel=0 disables the two-way audio probe.
+    - "rtsp://<rtsp-user>:<rtsp-password>@bridge:8554/owner/streaming?accessToken=<access-token>#rtsp/tcp#backchannel=0"
+
+api:
+  listen: ":1984"        # go2rtc web UI + API
+
+rtsp:
+  listen: ":8555"        # go2rtc's own RTSP republish (distinct from the bridge)
+
+webrtc:
+  listen: ":8556"
+
+log:
+  level: info

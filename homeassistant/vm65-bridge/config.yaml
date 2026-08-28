@@ -1,0 +1,57 @@
+name: Motorola Nursery Bridge
+version: "0.3.0"
+slug: vm65_bridge
+description: Publishes compatible Motorola Nursery cameras through Magic WEB2 and optional go2rtc.
+url: https://github.com/Paradox101/motorola-vm65-bridge
+arch:
+  - amd64
+  - aarch64
+init: false
+startup: application
+boot: manual
+ports:
+  1984/tcp: 1984
+  8555/tcp: 8555
+  8556/tcp: 8556
+  8556/udp: 8556
+  8557/tcp: 8558
+ports_description:
+  1984/tcp: go2rtc web UI / API
+  8555/tcp: go2rtc RTSP republish
+  8556/tcp: WebRTC (TCP)
+  8556/udp: WebRTC (UDP)
+  8557/tcp: Bridge health endpoint (host 8558)
+watchdog: "http://[HOST]:[PORT:8557]/healthz"
+webui: "http://[HOST]:[PORT:1984]/"
+map:
+  - share:rw
+options:
+  email: ""
+  otp_code: ""
+  control_host: "vrelay-de0.5gen.care"
+  stream_backend: bundled
+  mqtt_discovery: false
+  mqtt_host: core-mosquitto
+  mqtt_port: 1883
+  mqtt_username: ""
+  mqtt_password: ""
+  mqtt_discovery_prefix: homeassistant
+  stream_host: homeassistant.local
+  external_stream_port: 8556
+  shutdown_timeout: 10
+  credential_refresh_interval: 21600
+schema:
+  email: str
+  otp_code: password
+  control_host: str
+  stream_backend: list(bundled|external)
+  mqtt_discovery: bool
+  mqtt_host: str
+  mqtt_port: port
+  mqtt_username: str
+  mqtt_password: password
+  mqtt_discovery_prefix: str
+  stream_host: str
+  external_stream_port: port
+  shutdown_timeout: int(1,120)
+  credential_refresh_interval: int(300,86400)

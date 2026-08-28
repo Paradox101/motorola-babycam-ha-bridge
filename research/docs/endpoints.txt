@@ -1,0 +1,63 @@
+# Dynamically constructed production endpoints
+# Source: assets/flutter_assets/assets/moto_fepe-service.json
+# Control hostname is assembled as prefix + "." + suffix.
+primary.moto.5gencare.com
+
+# Source: com/orbweb/m2m/ORBConnectObject.java, ORBConnectObject.connect()
+https://{orbweb-rendezvous-host}/api/device/connection
+
+# Source: libapp.so AOT strings, package:fepe_device/src/models/camera_model.dart
+https://{control-host}/owner/streaming?accessToken={access_token}
+https://{control-host}/share/streaming?accessToken={access_token}&token={share_token}
+
+# RTSP endpoints assembled after LAN/P2P/relay port discovery
+# Source: libapp.so, CameraModel._getPlayerURL/_getStreamUrl
+rtsp://127.0.0.1:{mapped_port}/{camera_rtsp_point}
+rtsp://{rtsp_username}:{rtsp_password}@127.0.0.1:{mapped_port}/{camera_rtsp_point}
+rtsp://{camera_lan_ip}:{rtsp_port}/{camera_rtsp_point}
+
+# 5GenCare content/support URLs found verbatim
+https://app-res.5gencare.com
+https://app-res.5gencare.com/DEFAULT_BRAND_LOGO.png
+https://app-res.5gencare.com/DEFAULT_BRAND_LOGO_MOTO.png
+https://app-res.5gencare.com/ballmood.png
+https://app.5gencare.com/PrivacyPolicy.html
+https://app.5gencare.com/TermsofService.html
+https://app.5gencare.com/device.html
+https://appdownload.5gencare.com/chillaxcare
+https://appdownload.5gencare.com/motorola-nursery
+https://aws1.moto.5gencare.com:8443/files/readonly/appcontent/DEFAULT_BRAND_LOGO_MOTO.png
+https://aws1.moto.5gencare.com:8443/files/readonly/appcontent/5Gen.png
+https://blog.5gencare.com
+https://blog.5gencare.com/stage-articles
+https://motorolanursery.com/support/product-support?productId={product_id}
+https://motorola-nursery.app.link
+https://chillaxcare.app.link
+https://d2fmwnja72gang.cloudfront.net/?domain={domain}
+
+# Firebase
+https://fivegencare-motonursery-default-rtdb.firebaseio.com
+
+# Other live integrations found verbatim
+https://api.airtable.com/v0/app3uRDm752IHxKxq/
+https://api.airtable.com/v0/appDqQ5k1QEepbojl/
+https://api.airtable.com/v0/appOrFr2F7l5lGRRC/
+https://api.airtable.com/v0/appecXFTrK8Xk9f6T/
+https://api.airtable.com/v0/apps7dxb3PPKyYdma/
+https://api.airtable.com/v0/apptGljIkmlhItQqX/
+https://api.country.is/
+https://api.helpdesk.com//v1/externalTickets
+https://cdn.livechatinc.com/app/mobile/urls.json
+
+# Local/protocol/test literals
+http://127.0.0.1:{port}/{path}
+rtsp://127.0.0.1:{port}
+rtsp://
+rtsp://wowzaec2demo.streamlock.net/vod/mp4:BigBuckBunny_115k.mp4
+
+# Consumer links embedded in the UI
+https://www.amazon.com/s?k=baby+food+meal
+https://www.amazon.com/s?k=baby+monitors
+https://www.amazon.com/s?k=diaper
+https://www.amazon.com/s?k=formula+milk
+https://www.amazon.com/s?k=medicine+pill

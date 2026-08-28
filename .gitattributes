@@ -1,0 +1,3 @@
+# Byte-exact Magic wire fixtures must never be line-ending converted, or the
+# golden round-trip tests fail on CRLF checkouts (Windows autocrlf).
+internal/magic/testdata/** -text

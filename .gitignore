@@ -1,0 +1,55 @@
+runtime-logs/
+*.db
+*.pcap
+*.pcapng
+secrets*
+.env
+credentials*
+.gocache/
+.gopath/
+.toolchains/
+tools/go1.27.0/
+tools/go1.27.0.windows-amd64.zip
+
+# Vendor applications, extracted code, native binaries, and analysis databases
+*.apk
+*.xapk
+*.so
+*.zip
+*.har
+research/analysis/apktool-*/
+research/analysis/apk-*/
+research/analysis/jadx*/
+research/analysis/blutter-*/
+research/analysis/xapk/
+research/analysis/ghidra-projects/
+research/analysis/libdevconn-decompiled.txt
+research/analysis/libdevconn-strings.txt
+
+# Downloaded third-party toolchains (keep our own scripts under tools/)
+tools/android-command-line/
+tools/blutter/
+tools/frida-server/
+tools/gh-*/
+tools/ghidra-*/
+tools/jdk-*/
+
+# Sensitive runtime material, regardless of directory
+**/creds*.json
+**/*session*.json
+**/*credentials*.json
+**/*.pcap
+**/*.pcapng
+**/.env*
+!**/.env.example
+/.tmp-*
+
+# Python bytecode
+__pycache__/
+*.pyc
+
+# Go build artifacts
+/dist/
+/vm65-bridge
+# Local credentials for the go2rtc compose stack
+deploy/go2rtc/creds.json

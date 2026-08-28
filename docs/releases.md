@@ -1,0 +1,29 @@
+# Releases
+
+Releases use annotated semantic-version tags and publish binaries only. The
+Home Assistant Supervisor continues to build the add-on locally; the project
+does not publish add-on runtime images.
+
+## Release checklist
+
+1. Choose `X.Y.Z` and update `version` in
+   `homeassistant/vm65-bridge/config.yaml`.
+2. Set `ARG SOURCE_REF=vX.Y.Z` in the add-on Dockerfile.
+3. Update user-facing documentation and run the complete verification suite.
+4. Commit the release state.
+5. Create an annotated tag: `git tag -a vX.Y.Z -m "Motorola Nursery Bridge X.Y.Z"`.
+6. Push the tag and branch.
+
+The release workflow rejects lightweight tags, non-SemVer names, a mismatched
+add-on version or a mismatched Dockerfile source reference. It tests the code,
+builds `vm65-bridge` and `vm65-setup` for Linux amd64 and arm64, generates
+SHA-256 checksums and creates the GitHub release.
+
+Run the contract locally before tagging:
+
+```sh
+python tools/ci/check_release.py vX.Y.Z
+```
+
+Never move or reuse a published version tag. Prepare a new patch version for
+any correction.

@@ -1,0 +1,44 @@
+# Motorola/5GenCare production/control/content
+primary.moto.5gencare.com
+moto.5gencare.com
+aws1.moto.5gencare.com
+aws1.fepe.5gencare.com
+app-res.5gencare.com
+app.5gencare.com
+appdownload.5gencare.com
+blog.5gencare.com
+region.5gencare.com
+vrelay-us00.5gen.care
+vrelay-cn2.5gen.care
+motorolanursery.com
+motorola-nursery.app.link
+
+# Embedded development/alternate 5GenCare configuration
+aws22.fepe1.5gencare.com
+fepe1.5gencare.com
+primary.chillax.5gencare.com
+chillax.5gencare.com
+chillaxcare.app.link
+
+# Orbweb M2M/P2P rendezvous
+rdz.orbwebsys.com
+rdz.orbwebsys.com.cn
+
+# Google/Firebase/CDN and support integrations
+fivegencare-motonursery-default-rtdb.firebaseio.com
+d2fmwnja72gang.cloudfront.net
+api.airtable.com
+api.country.is
+api.helpdesk.com
+cdn.livechatinc.com
+www.amazon.com
+
+# Generic SDK/service domains present in bundled dependencies/resources
+firebase.google.com
+googleapis.com
+google.com
+github.com
+flutter.dev
+pub.dev
+streamlock.net
+
