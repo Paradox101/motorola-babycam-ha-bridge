@@ -39,8 +39,19 @@ fails the build if any of those appears.
 `auth_api` is deliberately not used: the add-on holds no local login of its own.
 The only credentials it takes are for the vendor account, and the Home Assistant
 user backend cannot validate those. Both secret options are typed `password` in
-the schema, both reach the process through the environment rather than the
-command line, and `otp_code` should be cleared once pairing succeeded.
+the schema and reach the process through the environment rather than the command
+line.
+
+Pairing itself no longer goes through the configuration at all. The pairing page
+sits behind the same Ingress gate as the Web UI, so the Supervisor has already
+authenticated a Home Assistant user before the form is reachable, and the emailed
+code is exchanged for a session in place rather than being stored as an add-on
+option. Clearing `otp_code` automatically would have required `hassio_api` and a
+Supervisor role, which is exactly the privilege this add-on declines; leaving the
+option unused avoids the question. The page posts JSON only, so another site
+cannot post to it without a preflight this server never answers, and it renders
+from inlined markup under `default-src 'none'` — nothing it needs comes off the
+network.
 
 An AppArmor profile ships as `apparmor.txt`; the Supervisor loads it
 automatically and matches its name against the add-on slug.

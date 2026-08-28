@@ -12,7 +12,9 @@ stream alias and `vm65_bridge` add-on slug.
 
 ## Current capabilities
 
-- account pairing by email OTP, with persisted session restore and refresh;
+- account pairing from the add-on Web UI — email address in, emailed code in,
+  no restart and no credentials in the configuration — with persisted session
+  restore and refresh;
 - automatic discovery of all cameras with the required 5GenCare fields;
 - one isolated Magic WEB2 bridge per camera;
 - optional bundled go2rtc with RTSP, WebRTC, MSE and snapshots;
@@ -38,8 +40,8 @@ validated on real hardware so far.
 1. Add `https://github.com/Paradox101/motorola-babycam-ha-bridge` as a custom add-on
    repository.
 2. Install **Motorola Nursery Bridge**.
-3. Set `email`, start once, copy the emailed code into `otp_code`, then start
-   again.
+3. Start the add-on and open its Web UI. Enter your Motorola Nursery account
+   address, then the code it emails you.
 4. Open the add-on Web UI. It is served through Home Assistant Ingress, so it
    works over any address you already use to reach Home Assistant, and it
    requires a signed-in Home Assistant user. The first stream remains `vm65`;
@@ -65,6 +67,7 @@ external mode, port mapping, troubleshooting and upgrades.
 | `internal/magic` | Magic WEB2 discovery, relay and tunnel protocol |
 | `internal/mqttdiscovery` | Reliable Home Assistant MQTT Discovery publisher |
 | `internal/ingress` | Authenticated reverse proxy for the Ingress Web UI |
+| `internal/pairing` | Account pairing page served behind Ingress |
 | `internal/snapshot` | Cached camera still images for Home Assistant |
 | `internal/netguard` | Listener restriction to the Supervisor network |
 | `internal/buildinfo` | Build version reported by both commands and `/status` |
