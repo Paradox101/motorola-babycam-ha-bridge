@@ -1,216 +1,403 @@
-// Package bridge exposes the proven Magic WEB2 tunnel as a local TCP endpoint.
+// Package bridge exposes the reconstructed Magic WEB2 tunnel as a local TCP
+// endpoint. It plays the same role the Android app plays with its dynamic
+// listen port (16667 in the measured session): a plain, local RTSP-over-TCP
+// socket that any player, go2rtc or Home Assistant can point at, with every
+// byte carried transparently to the camera through a magic.Tunnel.
 //
-// It listens on a local address and, for every accepted connection, opens a
-// fresh Magic WEB2 relay session to the camera's target port and copies bytes
-// transparently in both directions. Because the Magic tunnel is byte-
-// transparent (see internal/magic), a standard RTSP-over-TCP client such as
-// go2rtc or ffmpeg can connect to the local address and speak to the camera as
-// if it were on the LAN.
-//
-// Scope and honesty: this bridge only reconstructs the Magic transport layer,
-// which is fully proven. It consumes credentials (device id, SID, device token,
-// control host) that the app obtains earlier from the 5GenCare control flow.
-// This package does NOT derive, refresh or fabricate those credentials, and it
-// does NOT perform the 5GenCare-side authorization that signals the camera to
-// attach to the relay session. Without that authorization the relay accepts the
-// session but no camera bytes flow. See docs/missing-protocol-pieces.md.
+// The bridge deliberately performs no 5GenCare control flow. That flow (fresh
+// SID, device token, stream access token and relay parameters) is the one part
+// of the chain not reconstructable from an x86 host, so its outputs are handed
+// to the bridge as Credentials. Everything downstream of those credentials is
+// the proven, tested Magic transport.
 package bridge
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/local/motorola-vm65-bridge/internal/magic"
 )
 
-// DefaultTargetPort is the camera RTSP target port observed in the measured
-// session.
+// DefaultTargetPort is the camera target port observed in every measured VM65
+// live-view session.
 const DefaultTargetPort = 6667
 
-// DefaultDialTimeout bounds a single relay-open handshake.
-const DefaultDialTimeout = 15 * time.Second
-
-// Credentials are the per-device inputs the Magic tunnel needs. Every field is
-// a value the app obtains from the 5GenCare control flow; this package never
-// derives them.
+// Credentials are the per-camera values the 5GenCare control flow produces.
+// The bridge treats them as opaque inputs: it derives the magicUuid from them
+// but never fabricates, refreshes or persists them.
 type Credentials struct {
-	DeviceID    uint32
-	SID         string
-	DeviceToken string
-	ControlHost string
-	ControlPort int // defaults to magic.ControlPortDefault when zero
-	TargetPort  int // defaults to DefaultTargetPort when zero
+	DeviceID    uint32 // numeric device id
+	SID         string // camera SID from device discovery
+	DeviceToken string // opaque device token; also the tunnel crypto key
+	ControlHost string // Magic relay control host
+	ControlPort int    // defaults to magic.ControlPortDefault when zero
+	TargetPort  int    // defaults to DefaultTargetPort when zero
 }
 
-// Config configures a Server.
-type Config struct {
-	Credentials
+func (c Credentials) validate() error {
+	switch {
+	case c.SID == "":
+		return errors.New("credentials: SID is required")
+	case c.DeviceToken == "":
+		return errors.New("credentials: device token is required")
+	case c.ControlHost == "":
+		return errors.New("credentials: control host is required")
+	}
+	return nil
+}
 
+// Config configures a Bridge. ListenAddr and Credentials are required; the rest
+// have safe defaults.
+type Config struct {
 	// ListenAddr is the local address the bridge listens on, e.g.
-	// "127.0.0.1:8554". A downstream RTSP client connects here.
+	// "127.0.0.1:8554". Binding to loopback is strongly recommended: the tunnel
+	// carries an unauthenticated RTSP stream.
 	ListenAddr string
 
-	// DialTimeout bounds each relay-open handshake; zero uses
-	// DefaultDialTimeout.
+	Credentials Credentials
+
+	// DialTimeout bounds the Magic WEB2 opening handshake for one client. Zero
+	// selects a 15s default. It does not limit stream lifetime.
 	DialTimeout time.Duration
 
-	// Dial is injected in tests to reach an in-memory relay; nil uses the real
-	// network via magic.Dial's default dialer.
+	// DialRetries is the number of extra attempts to open the relay after the
+	// first fails, per client connection. Zero selects a default of 2; a
+	// negative value disables retrying.
+	DialRetries int
+
+	// DialBackoff is the base wait between relay-open attempts; it doubles each
+	// attempt. Zero selects 1s.
+	DialBackoff time.Duration
+
+	// Logger receives structured lifecycle logs. Zero uses slog.Default.
+	Logger *slog.Logger
+
+	// Dial injects the raw TCP dialer used for the relay connections. Zero uses
+	// a net.Dialer. Tests use it to point at an in-process fake relay.
 	Dial magic.DialFunc
-
-	// Logf receives operational log lines. It must never be called with secret
-	// values. nil disables logging.
-	Logf func(format string, args ...any)
 }
 
-// Server is a running local-to-Magic TCP bridge.
-type Server struct {
-	cfg       Config
-	magicUUID string
+// Bridge accepts local TCP connections and tunnels each one to the camera
+// through an independent Magic WEB2 relay session.
+type Bridge struct {
+	cfg         Config
+	magicUUID   string
+	dialTimeout time.Duration
+	dialRetries int
+	dialBackoff time.Duration
+	log         *slog.Logger
 
-	mu       sync.Mutex
 	listener net.Listener
+	sessions int64 // total accepted, atomic
+	active   int64 // currently open, atomic
+
+	mu      sync.Mutex
+	conns   map[net.Conn]struct{}
+	closing bool
 }
 
-// New validates the configuration and derives the stable magicUuid. It fails
-// fast on missing credentials so misconfiguration surfaces before any relay
-// traffic.
-func New(cfg Config) (*Server, error) {
+// New validates cfg and derives the stable magicUuid, but does not bind a
+// socket. Call Listen (or Serve) to start accepting.
+func New(cfg Config) (*Bridge, error) {
 	if cfg.ListenAddr == "" {
-		return nil, errors.New("listen address is required")
+		return nil, errors.New("bridge: listen address is required")
 	}
-	if cfg.ControlHost == "" {
-		return nil, errors.New("control host is required")
+	if err := cfg.Credentials.validate(); err != nil {
+		return nil, err
 	}
-	if cfg.DeviceToken == "" {
-		return nil, errors.New("device token is required")
-	}
-	if cfg.TargetPort == 0 {
-		cfg.TargetPort = DefaultTargetPort
-	}
-	if cfg.DialTimeout == 0 {
-		cfg.DialTimeout = DefaultDialTimeout
-	}
-	magicUUID, err := magic.GenerateMagicUUID(cfg.DeviceID, cfg.SID, cfg.DeviceToken)
+	magicUUID, err := magic.GenerateMagicUUID(cfg.Credentials.DeviceID, cfg.Credentials.SID, cfg.Credentials.DeviceToken)
 	if err != nil {
-		return nil, fmt.Errorf("derive magic uuid: %w", err)
+		return nil, fmt.Errorf("bridge: derive magic uuid: %w", err)
 	}
-	return &Server{cfg: cfg, magicUUID: magicUUID}, nil
+
+	dialTimeout := cfg.DialTimeout
+	if dialTimeout == 0 {
+		dialTimeout = 15 * time.Second
+	}
+	dialRetries := cfg.DialRetries
+	if dialRetries == 0 {
+		dialRetries = 2
+	}
+	if dialRetries < 0 {
+		dialRetries = 0
+	}
+	dialBackoff := cfg.DialBackoff
+	if dialBackoff == 0 {
+		dialBackoff = time.Second
+	}
+	log := cfg.Logger
+	if log == nil {
+		log = slog.Default()
+	}
+	return &Bridge{
+		cfg:         cfg,
+		magicUUID:   magicUUID,
+		dialTimeout: dialTimeout,
+		dialRetries: dialRetries,
+		dialBackoff: dialBackoff,
+		log:         log,
+		conns:       make(map[net.Conn]struct{}),
+	}, nil
 }
 
-func (s *Server) logf(format string, args ...any) {
-	if s.cfg.Logf != nil {
-		s.cfg.Logf(format, args...)
-	}
-}
-
-// Addr reports the address the server is listening on, or nil before Serve has
-// bound the listener.
-func (s *Server) Addr() net.Addr {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.listener == nil {
+// Listen binds the configured address so Addr reports the real bound port
+// before any connection arrives. Serve calls it implicitly when needed.
+func (b *Bridge) Listen() error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.listener != nil {
 		return nil
 	}
-	return s.listener.Addr()
+	listener, err := net.Listen("tcp", b.cfg.ListenAddr)
+	if err != nil {
+		return fmt.Errorf("bridge: listen on %s: %w", b.cfg.ListenAddr, err)
+	}
+	b.listener = listener
+	return nil
 }
 
-// Serve binds the listen address and accepts connections until ctx is cancelled
-// or a non-temporary accept error occurs. Each accepted connection is handled in
-// its own goroutine. Serve returns nil on a clean ctx cancellation.
-func (s *Server) Serve(ctx context.Context) error {
-	lc := net.ListenConfig{}
-	listener, err := lc.Listen(ctx, "tcp", s.cfg.ListenAddr)
-	if err != nil {
-		return fmt.Errorf("listen on %s: %w", s.cfg.ListenAddr, err)
+// Addr returns the bound listen address, or nil before Listen/Serve.
+func (b *Bridge) Addr() net.Addr {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.listener == nil {
+		return nil
 	}
-	s.mu.Lock()
-	s.listener = listener
-	s.mu.Unlock()
+	return b.listener.Addr()
+}
 
-	s.logf("bridge listening on %s -> Magic control %s:%d target %d",
-		listener.Addr(), s.cfg.ControlHost, s.controlPort(), s.cfg.TargetPort)
+// Serve accepts connections until ctx is cancelled or Close is called. It binds
+// the listener if Listen has not already been called. Each accepted connection
+// is handled in its own goroutine. Serve returns nil on a clean shutdown.
+func (b *Bridge) Serve(ctx context.Context) error {
+	if err := b.Listen(); err != nil {
+		return err
+	}
+	b.log.Info("bridge listening",
+		"addr", b.Addr().String(),
+		"control_host", b.cfg.Credentials.ControlHost,
+		"target_port", b.targetPort())
 
-	// Close the listener when ctx is cancelled so Accept unblocks.
+	// Unblock Accept when ctx is cancelled.
+	stop := make(chan struct{})
+	var once sync.Once
+	closeStop := func() { once.Do(func() { close(stop) }) }
+	defer closeStop()
 	go func() {
-		<-ctx.Done()
-		listener.Close()
+		select {
+		case <-ctx.Done():
+			b.Close()
+		case <-stop:
+		}
 	}()
 
 	var wg sync.WaitGroup
 	for {
-		conn, err := listener.Accept()
+		conn, err := b.listener.Accept()
 		if err != nil {
-			if ctx.Err() != nil {
-				wg.Wait()
+			closeStop()
+			wg.Wait()
+			if b.isClosing() || ctx.Err() != nil {
 				return nil
 			}
-			return fmt.Errorf("accept: %w", err)
+			return fmt.Errorf("bridge: accept: %w", err)
 		}
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			s.handle(ctx, conn)
+			b.handle(ctx, conn)
 		}()
 	}
 }
 
-func (s *Server) controlPort() int {
-	if s.cfg.ControlPort != 0 {
-		return s.cfg.ControlPort
+// Close stops accepting and tears down the listener and all live client
+// connections. Tunnels close as their copy loops observe the closed sockets.
+func (b *Bridge) Close() error {
+	b.mu.Lock()
+	if b.closing {
+		b.mu.Unlock()
+		return nil
 	}
-	return magic.ControlPortDefault
+	b.closing = true
+	listener := b.listener
+	conns := make([]net.Conn, 0, len(b.conns))
+	for c := range b.conns {
+		conns = append(conns, c)
+	}
+	b.mu.Unlock()
+
+	var err error
+	if listener != nil {
+		err = listener.Close()
+	}
+	for _, c := range conns {
+		_ = c.Close()
+	}
+	return err
 }
 
-// handle opens a fresh Magic tunnel for one downstream connection and bridges
-// bytes both ways until either side closes.
-func (s *Server) handle(ctx context.Context, downstream net.Conn) {
-	defer downstream.Close()
-	peer := downstream.RemoteAddr()
-	s.logf("accepted %s, opening Magic relay session", peer)
+// Stats reports lifetime counters: total sessions accepted and currently active.
+func (b *Bridge) Stats() (total, active int64) {
+	return atomic.LoadInt64(&b.sessions), atomic.LoadInt64(&b.active)
+}
 
-	dialCtx, cancel := context.WithTimeout(ctx, s.cfg.DialTimeout)
-	defer cancel()
+func (b *Bridge) handle(ctx context.Context, client net.Conn) {
+	id := atomic.AddInt64(&b.sessions, 1)
+	atomic.AddInt64(&b.active, 1)
+	b.trackConn(client, true)
+	log := b.log.With("session", id, "client", client.RemoteAddr().String())
+	log.Info("client connected")
 
-	tunnel, err := magic.Dial(dialCtx, magic.TunnelConfig{
-		ControlHost: s.cfg.ControlHost,
-		ControlPort: s.cfg.ControlPort,
-		MagicUUID:   s.magicUUID,
-		TargetPort:  s.cfg.TargetPort,
-		SessionName: magic.NewSessionName(),
-		DeviceToken: s.cfg.DeviceToken,
-		Dial:        s.cfg.Dial,
-	})
+	defer func() {
+		_ = client.Close()
+		b.trackConn(client, false)
+		atomic.AddInt64(&b.active, -1)
+		log.Info("client disconnected")
+	}()
+
+	tunnel, err := b.dialWithRetry(ctx, log)
 	if err != nil {
-		s.logf("relay open failed for %s: %v", peer, err)
+		log.Error("relay dial failed", "err", err)
 		return
 	}
 	defer tunnel.Close()
+	log.Info("relay session open",
+		"stream_host", tunnel.Response.StreamHost,
+		"connection_num", tunnel.Response.ConnectionNumber,
+		"mode", tunnel.Response.Mode)
 
-	r := tunnel.Response
-	s.logf("relay open for %s: num=%d streamHost=%s targetPort=%d mode=%d",
-		peer, r.ConnectionNumber, r.StreamHost, r.TargetPort, r.Mode)
+	// When the outer context is cancelled, drop both ends so the copies return.
+	stop := make(chan struct{})
+	defer close(stop)
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = client.Close()
+			_ = tunnel.Close()
+		case <-stop:
+		}
+	}()
 
-	pipe(downstream, tunnel)
-	s.logf("session for %s closed", peer)
+	fromClient, fromRelay := pipe(client, tunnel, log)
+	log.Info("relay session closed", "bytes_to_relay", fromClient, "bytes_from_camera", fromRelay)
+	// A session that opened but never carried a single camera byte is the exact
+	// signature of a relay session without an attached camera peer. In the wild
+	// this means the 5GenCare-authorized session is missing or expired; make
+	// that legible instead of a silent empty stream. Skipped on context cancel,
+	// where the empty read is our own shutdown.
+	if fromRelay == 0 && ctx.Err() == nil {
+		log.Warn("relay opened but camera sent no data; the camera did not attach. "+
+			"This is expected without a valid 5GenCare-authorized session "+
+			"(fresh SID / device token / stream accessToken). See docs/missing-protocol-pieces.md",
+			"bytes_to_relay", fromClient)
+	}
 }
 
-// pipe copies bytes in both directions and returns when either direction ends,
-// then unblocks the other by closing both conns (via the callers' defers, plus
-// an explicit close here to break a blocked Read).
-func pipe(a, b net.Conn) {
-	done := make(chan struct{}, 2)
-	go func() { _, _ = io.Copy(a, b); done <- struct{}{} }()
-	go func() { _, _ = io.Copy(b, a); done <- struct{}{} }()
-	<-done
-	// One direction ended; force the other closed so its Copy returns and the
-	// goroutine does not leak.
-	a.Close()
-	b.Close()
-	<-done
+// dialWithRetry opens a relay session, retrying transient failures with an
+// exponential backoff bounded by the outer context. Each attempt gets its own
+// dial timeout.
+func (b *Bridge) dialWithRetry(ctx context.Context, log *slog.Logger) (*magic.Tunnel, error) {
+	backoff := b.dialBackoff
+	var lastErr error
+	for attempt := 0; attempt <= b.dialRetries; attempt++ {
+		if attempt > 0 {
+			log.Warn("retrying relay dial", "attempt", attempt, "max", b.dialRetries, "prev_err", lastErr)
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(backoff):
+			}
+			backoff *= 2
+		}
+		dialCtx, cancel := context.WithTimeout(ctx, b.dialTimeout)
+		tunnel, err := magic.Dial(dialCtx, magic.TunnelConfig{
+			ControlHost: b.cfg.Credentials.ControlHost,
+			ControlPort: b.cfg.Credentials.ControlPort,
+			MagicUUID:   b.magicUUID,
+			TargetPort:  b.targetPort(),
+			SessionName: freshSessionName(),
+			DeviceToken: b.cfg.Credentials.DeviceToken,
+			Dial:        b.cfg.Dial,
+		})
+		cancel()
+		if err == nil {
+			return tunnel, nil
+		}
+		lastErr = err
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+	}
+	return nil, lastErr
+}
+
+// pipe copies bytes in both directions until either side closes, then returns
+// the number of bytes carried from the client to the relay and from the relay
+// (camera) back to the client.
+func pipe(client net.Conn, tunnel *magic.Tunnel, log *slog.Logger) (fromClient, fromRelay int64) {
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	// Each goroutine writes only its own counter, exactly once; wg.Wait below
+	// establishes the happens-before edge for reading them.
+	copyDir := func(dst io.Writer, src io.Reader, dir string, count *int64, closeDst func()) {
+		defer wg.Done()
+		n, err := io.Copy(dst, src)
+		*count = n
+		if err != nil && !isExpectedClose(err) {
+			log.Debug("copy ended", "dir", dir, "err", err)
+		}
+		// Closing the destination unblocks the opposite direction's Read.
+		closeDst()
+	}
+
+	go copyDir(tunnel, client, "client->relay", &fromClient, func() { _ = tunnel.Close() })
+	go copyDir(client, tunnel, "relay->client", &fromRelay, func() { _ = client.Close() })
+	wg.Wait()
+	return fromClient, fromRelay
+}
+
+func (b *Bridge) targetPort() int {
+	if b.cfg.Credentials.TargetPort != 0 {
+		return b.cfg.Credentials.TargetPort
+	}
+	return DefaultTargetPort
+}
+
+func (b *Bridge) trackConn(c net.Conn, add bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if add {
+		b.conns[c] = struct{}{}
+	} else {
+		delete(b.conns, c)
+	}
+}
+
+func (b *Bridge) isClosing() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.closing
+}
+
+func isExpectedClose(err error) bool {
+	return errors.Is(err, net.ErrClosed) || errors.Is(err, io.EOF)
+}
+
+// freshSessionName returns a canonical 36-char UUID used as the client session
+// label in the app-discovery request, one per relay session.
+func freshSessionName() string {
+	var b [16]byte
+	_, _ = rand.Read(b[:])
+	b[6] = (b[6] & 0x0f) | 0x40
+	b[8] = (b[8] & 0x3f) | 0x80
+	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
 }

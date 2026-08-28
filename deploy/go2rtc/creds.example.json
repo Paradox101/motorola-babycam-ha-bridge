@@ -1,0 +1,8 @@
+{
+  "device_id": 0,
+  "sid": "REPLACE_WITH_CAMERA_SID",
+  "device_token": "REPLACE_WITH_DEVICE_TOKEN",
+  "control_host": "vrelay-de0.5gen.care",
+  "control_port": 8800,
+  "target_port": 6667
+}
