@@ -27,7 +27,11 @@ function Test-TrackedPaths {
 function Get-ProductionResearchReferences {
     $roots = @('cmd', 'internal', 'homeassistant', 'deploy')
     $files = & git grep -Il 'research/' -- $roots 'Dockerfile' 2>$null
-    if ($LASTEXITCODE -notin @(0, 1)) {
+    # git grep exits 1 when it matches nothing, which is the good case here.
+    # Capture it immediately: leaving $LASTEXITCODE at 1 makes pwsh exit 1 for
+    # the whole script even though the policy passed.
+    $grepExit = $LASTEXITCODE
+    if ($grepExit -notin @(0, 1)) {
         throw 'git grep failed while checking production references'
     }
     $executableFiles = @($files | Where-Object {
@@ -78,3 +82,6 @@ if ($violations.Count -gt 0) {
 }
 
 Write-Output "repository policy passed ($($tracked.Count) repository files checked)"
+# Explicit: without it the script inherits the exit code of the last native
+# command it happened to run, and a clean tree reports failure.
+exit 0

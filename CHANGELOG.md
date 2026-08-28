@@ -32,6 +32,9 @@ stay valid; no configuration change is required to upgrade.
 - **The add-on built from the pre-rename repository URL**, which worked only
   through GitHub's rename redirect.
 - **`make check` always failed** on a clean tree.
+- **The repository policy check always exited 1**, so CI had been red on `main`
+  since 28 August: `git grep` exits 1 when it matches nothing, and that code
+  became the script's exit code even after it printed that the policy passed.
 - **The container build never verified the committed checksums**, because only
   `go.mod` was copied before `go mod download`.
 
