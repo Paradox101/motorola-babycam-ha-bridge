@@ -10,9 +10,10 @@ ARG GO_VERSION=1.27
 FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-alpine AS build
 WORKDIR /src
 
-# Module graph first for layer caching. There are no third-party deps, so this
-# stays a single go.mod; keep the pattern for when that changes.
-COPY go.mod ./
+# Module graph first for layer caching. go.sum must be copied alongside go.mod:
+# without it `go mod download` writes a fresh one and the checksums committed to
+# the repository are never verified in this build.
+COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .

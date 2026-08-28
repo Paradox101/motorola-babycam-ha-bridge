@@ -30,6 +30,7 @@ type Config struct {
 	Verbose         bool
 	MQTT            MQTT
 	StreamURL       string
+	SnapshotBase    string
 	Go2RTCRequired  bool
 	Go2RTCURL       string
 	ShutdownTimeout time.Duration
@@ -55,6 +56,7 @@ func Load(args []string, lookupEnv func(string) (string, bool)) (Config, error) 
 	flags.StringVar(&legacyMQTTPassword, "mqtt-password", "", "deprecated: use VM65_MQTT_PASSWORD")
 	flags.StringVar(&cfg.MQTT.DiscoveryPrefix, "mqtt-discovery-prefix", "homeassistant", "MQTT discovery prefix")
 	flags.StringVar(&cfg.StreamURL, "stream-url", "", "RTSP URL for MQTT discovery")
+	flags.StringVar(&cfg.SnapshotBase, "snapshot-url-base", "", "optional go2rtc base URL for MQTT snapshot images, e.g. http://homeassistant.local:1984")
 	flags.BoolVar(&cfg.Go2RTCRequired, "go2rtc-required", false, "require a reachable go2rtc endpoint for readiness")
 	flags.StringVar(&cfg.Go2RTCURL, "go2rtc-url", "http://127.0.0.1:1984/", "go2rtc readiness endpoint")
 	flags.DurationVar(&cfg.ShutdownTimeout, "shutdown-timeout", 10*time.Second, "graceful shutdown timeout")
@@ -109,6 +111,12 @@ func (c Config) Validate() error {
 	if err != nil || parsed.Scheme != "rtsp" || parsed.Host == "" || parsed.Path == "" {
 		return errors.New("mqtt stream URL must be an absolute rtsp URL")
 	}
+	if c.SnapshotBase != "" {
+		snapshot, err := url.Parse(c.SnapshotBase)
+		if err != nil || (snapshot.Scheme != "http" && snapshot.Scheme != "https") || snapshot.Host == "" {
+			return errors.New("snapshot URL base must be an absolute http or https URL")
+		}
+	}
 	return nil
 }
 
@@ -127,7 +135,7 @@ func validateAddress(name, address string) error {
 // Redacted returns a log-safe configuration summary.
 func (c Config) Redacted() string {
 	return fmt.Sprintf(
-		"listen=%q status=%q credentials=%q registry=%q mqtt_host=%q mqtt_port=%d mqtt_user_set=%t mqtt_password_set=%t stream_url=%q go2rtc_required=%t go2rtc_url=%q shutdown_timeout=%s",
+		"listen=%q status=%q credentials=%q registry=%q mqtt_host=%q mqtt_port=%d mqtt_user_set=%t mqtt_password_set=%t stream_url=%q snapshot_base=%q go2rtc_required=%t go2rtc_url=%q shutdown_timeout=%s",
 		c.ListenAddr,
 		c.StatusAddr,
 		c.CredentialsPath,
@@ -137,6 +145,7 @@ func (c Config) Redacted() string {
 		c.MQTT.Username != "",
 		c.MQTT.Password != "",
 		c.StreamURL,
+		c.SnapshotBase,
 		c.Go2RTCRequired,
 		c.Go2RTCURL,
 		c.ShutdownTimeout,

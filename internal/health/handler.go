@@ -8,7 +8,17 @@ import (
 func NewHandler(state *State) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(writer http.ResponseWriter, _ *http.Request) {
-		writeJSON(writer, map[string]string{"status": "ok"}, state.Live())
+		snapshot := state.Snapshot()
+		healthy := state.Healthy()
+		status := "ok"
+		if !healthy {
+			status = "unhealthy"
+		}
+		writeJSON(writer, map[string]any{
+			"status":        status,
+			"bridges_ready": snapshot.BridgesReady,
+			"bridges_total": snapshot.BridgesTotal,
+		}, healthy)
 	})
 	mux.HandleFunc("/readyz", func(writer http.ResponseWriter, _ *http.Request) {
 		snapshot := state.Snapshot()

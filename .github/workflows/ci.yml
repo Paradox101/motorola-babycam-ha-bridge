@@ -11,6 +11,7 @@ permissions:
 env:
   GO_VERSION: "1.27.0"
   STATICCHECK_VERSION: "2026.2.1"
+  GOVULNCHECK_VERSION: "v1.7.0"
 
 jobs:
   quality:
@@ -37,6 +38,20 @@ jobs:
         run: go install honnef.co/go/tools/cmd/staticcheck@${STATICCHECK_VERSION}
       - name: Staticcheck
         run: staticcheck ./...
+      - name: Verify the module graph is tidy
+        shell: bash
+        run: |
+          go mod tidy
+          if ! git diff --exit-code go.mod go.sum; then
+            echo "go.mod/go.sum are not tidy; run 'go mod tidy' and commit the result"
+            exit 1
+          fi
+      - name: Scan dependencies for known vulnerabilities
+        # govulncheck type-checks the sources, so it must be built with a
+        # toolchain at least as new as the module's go directive.
+        env:
+          GOTOOLCHAIN: go${{ env.GO_VERSION }}
+        run: go run golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION} ./...
       - name: Install metadata validator dependency
         run: python -m pip install --disable-pip-version-check PyYAML==6.0.3
       - name: Test add-on validator

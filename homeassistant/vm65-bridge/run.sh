@@ -27,6 +27,16 @@ EXTERNAL_STREAM_PORT=$(bashio::config 'external_stream_port')
 SHUTDOWN_TIMEOUT=$(bashio::config 'shutdown_timeout')
 CREDENTIAL_REFRESH_INTERVAL=$(bashio::config 'credential_refresh_interval')
 
+# Home Assistant can hand us the broker itself. Anything set explicitly in the
+# add-on options still wins, so existing configurations keep working.
+if [[ "${MQTT_DISCOVERY}" == "true" ]] && bashio::services.available "mqtt"; then
+  [[ -z "${MQTT_HOST}" || "${MQTT_HOST}" == "core-mosquitto" ]] && MQTT_HOST=$(bashio::services mqtt "host")
+  [[ -z "${MQTT_PORT}" || "${MQTT_PORT}" == "1883" ]] && MQTT_PORT=$(bashio::services mqtt "port")
+  [[ -z "${MQTT_USERNAME}" ]] && MQTT_USERNAME=$(bashio::services mqtt "username")
+  [[ -z "${MQTT_PASSWORD}" ]] && MQTT_PASSWORD=$(bashio::services mqtt "password")
+  bashio::log.info "Using the MQTT broker provided by Home Assistant (${MQTT_HOST}:${MQTT_PORT})"
+fi
+
 if [[ -z "${CONTROL_HOST}" ]]; then
   bashio::exit.nok "control_host must not be empty"
 fi
@@ -45,12 +55,22 @@ export VM65_MQTT_PASSWORD="${MQTT_PASSWORD}"
 
 load_credentials() {
   local -a setup_args
+  local status=0
   bashio::log.info "Refreshing compatible camera credentials from Motorola Nursery"
   setup_args=(-email "${EMAIL}" -control-host "${CONTROL_HOST}" -output "${CREDS}" -registry "${REGISTRY}" -go2rtc-config "${GO2RTC_CFG}")
   if [[ "${STREAM_BACKEND}" == "external" ]]; then
     setup_args+=( -go2rtc-webrtc=false )
   fi
-  vm65-setup "${setup_args[@]}"
+  vm65-setup "${setup_args[@]}" || status=$?
+  if (( status != 0 )); then
+    # Pairing is a user action, not a crash: say what to do instead of letting
+    # the Supervisor restart the add-on in a loop.
+    bashio::log.fatal "Could not obtain camera credentials."
+    bashio::log.fatal "If the log above says PAIRING_REQUIRED: set the 'email' option, start the"
+    bashio::log.fatal "add-on once, then copy the code from your inbox into 'otp_code' and start again."
+    return "${status}"
+  fi
+  return 0
 }
 
 shutdown_children() {
@@ -92,39 +112,51 @@ handle_signal() {
 trap shutdown_children EXIT
 trap handle_signal TERM INT
 
-while true; do
-  load_credentials
+load_credentials
 
-  bashio::log.info "Starting Motorola Nursery bridge (backend=${STREAM_BACKEND})"
-  BRIDGE_LISTEN=127.0.0.1:8554
-  STREAM_PORT=8555
-  if [[ "${STREAM_BACKEND}" == "external" ]]; then STREAM_PORT=${EXTERNAL_STREAM_PORT}; fi
-  BRIDGE_ARGS=(-listen "${BRIDGE_LISTEN}" -status 0.0.0.0:8557 -creds "${CREDS}" -registry "${REGISTRY}" -stream-url "rtsp://${STREAM_HOST}:${STREAM_PORT}/vm65" -shutdown-timeout "${SHUTDOWN_TIMEOUT}s")
-  BRIDGE_ARGS+=( -go2rtc-required -go2rtc-url "http://127.0.0.1:1984/" )
-  if [[ "${MQTT_DISCOVERY}" == "true" ]]; then
-    BRIDGE_ARGS+=( -mqtt-host "${MQTT_HOST}" -mqtt-port "${MQTT_PORT}" -mqtt-username "${MQTT_USERNAME}" -mqtt-discovery-prefix "${MQTT_PREFIX}" )
+bashio::log.info "Starting Motorola Nursery bridge (backend=${STREAM_BACKEND})"
+BRIDGE_LISTEN=127.0.0.1:8554
+STREAM_PORT=8555
+if [[ "${STREAM_BACKEND}" == "external" ]]; then STREAM_PORT=${EXTERNAL_STREAM_PORT}; fi
+BRIDGE_ARGS=(-listen "${BRIDGE_LISTEN}" -status 0.0.0.0:8557 -creds "${CREDS}" -registry "${REGISTRY}" -stream-url "rtsp://${STREAM_HOST}:${STREAM_PORT}/vm65" -shutdown-timeout "${SHUTDOWN_TIMEOUT}s")
+BRIDGE_ARGS+=( -go2rtc-required -go2rtc-url "http://127.0.0.1:1984/" )
+if [[ "${MQTT_DISCOVERY}" == "true" ]]; then
+  BRIDGE_ARGS+=( -mqtt-host "${MQTT_HOST}" -mqtt-port "${MQTT_PORT}" -mqtt-username "${MQTT_USERNAME}" -mqtt-discovery-prefix "${MQTT_PREFIX}" )
+  # Snapshots are served by the bundled go2rtc; in external mode the media
+  # server owns them, so no snapshot URL is advertised.
+  if [[ "${STREAM_BACKEND}" != "external" ]]; then
+    BRIDGE_ARGS+=( -snapshot-url-base "http://${STREAM_HOST}:1984" )
   fi
-  vm65-bridge "${BRIDGE_ARGS[@]}" &
-  BRIDGE_PID=$!
+fi
+vm65-bridge "${BRIDGE_ARGS[@]}" &
+BRIDGE_PID=$!
 
-  WAIT_PIDS=("${BRIDGE_PID}")
-  bashio::log.info "Starting go2rtc RTSP republisher (WebRTC backend=${STREAM_BACKEND})"
-  go2rtc -config "${GO2RTC_CFG}" &
-  GO2RTC_PID=$!
-  WAIT_PIDS+=("${GO2RTC_PID}")
+bashio::log.info "Starting go2rtc RTSP republisher (WebRTC backend=${STREAM_BACKEND})"
+go2rtc -config "${GO2RTC_CFG}" &
+GO2RTC_PID=$!
 
+while true; do
   sleep "${CREDENTIAL_REFRESH_INTERVAL}" &
   REFRESH_PID=$!
-  WAIT_PIDS+=("${REFRESH_PID}")
+
   set +e
-  wait -n "${WAIT_PIDS[@]}"
+  wait -n "${BRIDGE_PID}" "${GO2RTC_PID}" "${REFRESH_PID}"
   STATUS=$?
   set -e
 
-  if ! kill -0 "${REFRESH_PID}" 2>/dev/null; then
-    bashio::log.info "Credential refresh interval reached; restarting media services"
-    shutdown_children
-    continue
+  if kill -0 "${REFRESH_PID}" 2>/dev/null; then
+    # The bridge or go2rtc exited: that is a real failure, so surface it.
+    exit "${STATUS}"
   fi
-  exit "${STATUS}"
+  REFRESH_PID=""
+
+  # The refresh interval elapsed. Rewrite the credentials and signal the bridge
+  # to pick them up. Cameras whose credentials did not change keep streaming, so
+  # nobody loses their picture over a routine refresh.
+  bashio::log.info "Credential refresh interval reached; refreshing in place"
+  if load_credentials; then
+    kill -HUP "${BRIDGE_PID}" 2>/dev/null || true
+  else
+    bashio::log.warning "Credential refresh failed; continuing with the current credentials"
+  fi
 done

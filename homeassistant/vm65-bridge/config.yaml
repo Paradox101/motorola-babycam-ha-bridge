@@ -1,14 +1,22 @@
 name: Motorola Nursery Bridge
-version: "0.3.0"
+version: "0.4.0"
 slug: vm65_bridge
 description: Publishes compatible Motorola Nursery cameras through Magic WEB2 and optional go2rtc.
-url: https://github.com/Paradox101/motorola-vm65-bridge
+url: https://github.com/Paradox101/motorola-babycam-ha-bridge
 arch:
   - amd64
   - aarch64
 init: false
 startup: application
 boot: manual
+# The Web UI is served through Home Assistant Ingress. A webui: link built from
+# [HOST]:[PORT:1984] only resolves on the local network over plain http, so it
+# breaks for anyone reaching Home Assistant through a domain name, a reverse
+# proxy or Nabu Casa. Ingress serves the same page on whatever host and scheme
+# the browser already uses, with Home Assistant's own authentication.
+ingress: true
+ingress_port: 1984
+panel_icon: mdi:baby-face-outline
 ports:
   1984/tcp: 1984
   8555/tcp: 8555
@@ -16,15 +24,14 @@ ports:
   8556/udp: 8556
   8557/tcp: 8558
 ports_description:
-  1984/tcp: go2rtc web UI / API
+  1984/tcp: go2rtc API, used for camera snapshots and direct access (the Web UI uses Ingress)
   8555/tcp: go2rtc RTSP republish
   8556/tcp: WebRTC (TCP)
   8556/udp: WebRTC (UDP)
   8557/tcp: Bridge health endpoint (host 8558)
 watchdog: "http://[HOST]:[PORT:8557]/healthz"
-webui: "http://[HOST]:[PORT:1984]/"
-map:
-  - share:rw
+services:
+  - mqtt:want
 options:
   email: ""
   otp_code: ""

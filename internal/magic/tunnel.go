@@ -8,11 +8,17 @@ import (
 	"fmt"
 	"net"
 	"strconv"
+	"sync"
 	"time"
 )
 
 // ControlPortDefault is the native default Magic control port (0x2260).
 const ControlPortDefault = 8800
+
+// DefaultHandshakeTimeout bounds the opening sequence when the caller's context
+// carries no deadline of its own. Without it a relay that accepts the TCP
+// connection but never answers would block Dial forever.
+const DefaultHandshakeTimeout = 15 * time.Second
 
 var _ net.Conn = (*Tunnel)(nil)
 
@@ -32,6 +38,10 @@ type TunnelConfig struct {
 	SessionName string   // 36-byte session name
 	DeviceToken string   // opaque device token; the tunnel crypto key
 	Dial        DialFunc // defaults to a net.Dialer when nil
+
+	// HandshakeTimeout bounds the opening sequence when ctx has no deadline.
+	// Zero selects DefaultHandshakeTimeout.
+	HandshakeTimeout time.Duration
 }
 
 // Tunnel is a byte-transparent WEB2 relay connection. After Dial it implements
@@ -41,10 +51,18 @@ type Tunnel struct {
 	// Response is the parsed control-host answer that selected this session.
 	Response AppResponse
 
+	// mu guards control and stream, which the opening sequence assigns while a
+	// cancellation watcher may already be closing them.
+	mu      sync.Mutex
 	control net.Conn
 	stream  net.Conn
 	encoder *TokenEncoder
 	decoder *TokenDecoder
+
+	// controlReader stays with the tunnel for the connection's lifetime. It may
+	// hold bytes the relay sent after the response newline in the same segment;
+	// discarding the reader would silently drop them.
+	controlReader *bufio.Reader
 
 	readBuf bytes.Buffer
 	rawBuf  []byte
@@ -59,6 +77,11 @@ type Tunnel struct {
 // It does not read or play any media; it only establishes the transparent byte
 // channel. The control connection is kept open for the tunnel's lifetime, since
 // relay keepalive/close behaviour on the control socket is not yet confirmed.
+//
+// Every step of the sequence — not just the TCP connects — runs under one
+// deadline taken from ctx, and cancelling ctx tears the sockets down. A relay
+// that accepts the connection and then goes silent therefore fails the dial
+// instead of blocking forever.
 func Dial(ctx context.Context, cfg TunnelConfig) (*Tunnel, error) {
 	if cfg.DeviceToken == "" {
 		return nil, errors.New("device token is required")
@@ -71,6 +94,7 @@ func Dial(ctx context.Context, cfg TunnelConfig) (*Tunnel, error) {
 	if dial == nil {
 		dial = (&net.Dialer{}).DialContext
 	}
+	deadline := handshakeDeadline(ctx, cfg.HandshakeTimeout)
 
 	request := AppRequest{
 		MagicUUID:   cfg.MagicUUID,
@@ -89,10 +113,26 @@ func Dial(ctx context.Context, cfg TunnelConfig) (*Tunnel, error) {
 	}
 	tunnel := &Tunnel{control: control, rawBuf: make([]byte, 32*1024)}
 
+	// Cancelling ctx must abort a handshake that is already blocked in a read
+	// or write; the deadline alone only bounds it.
+	handshakeDone := make(chan struct{})
+	defer close(handshakeDone)
+	go func() {
+		select {
+		case <-ctx.Done():
+			tunnel.Close()
+		case <-handshakeDone:
+		}
+	}()
+
+	if err := control.SetDeadline(deadline); err != nil {
+		return nil, tunnel.fail("set control deadline", err)
+	}
 	if _, err := control.Write(requestBytes); err != nil {
 		return nil, tunnel.fail("send app request", err)
 	}
-	line, err := bufio.NewReader(control).ReadBytes('\n')
+	tunnel.controlReader = bufio.NewReader(control)
+	line, err := tunnel.controlReader.ReadBytes('\n')
 	if err != nil {
 		return nil, tunnel.fail("read app response", err)
 	}
@@ -111,7 +151,12 @@ func Dial(ctx context.Context, cfg TunnelConfig) (*Tunnel, error) {
 	if err != nil {
 		return nil, tunnel.fail("dial stream host", err)
 	}
+	tunnel.mu.Lock()
 	tunnel.stream = stream
+	tunnel.mu.Unlock()
+	if err := stream.SetDeadline(deadline); err != nil {
+		return nil, tunnel.fail("set stream deadline", err)
+	}
 
 	open := RelayOpen{
 		Version:          RelayOpenVersion2,
@@ -134,7 +179,28 @@ func Dial(ctx context.Context, cfg TunnelConfig) (*Tunnel, error) {
 	if tunnel.decoder, err = NewTokenDecoder(cfg.DeviceToken); err != nil {
 		return nil, tunnel.fail("init token decoder", err)
 	}
+
+	// The handshake deadline must not outlive the handshake: a live stream has
+	// no fixed duration.
+	if err := stream.SetDeadline(time.Time{}); err != nil {
+		return nil, tunnel.fail("clear stream deadline", err)
+	}
+	if err := control.SetDeadline(time.Time{}); err != nil {
+		return nil, tunnel.fail("clear control deadline", err)
+	}
 	return tunnel, nil
+}
+
+// handshakeDeadline prefers the caller's deadline and falls back to a fixed
+// timeout, so an unbounded context can never produce an unbounded handshake.
+func handshakeDeadline(ctx context.Context, timeout time.Duration) time.Time {
+	if deadline, ok := ctx.Deadline(); ok {
+		return deadline
+	}
+	if timeout <= 0 {
+		timeout = DefaultHandshakeTimeout
+	}
+	return time.Now().Add(timeout)
 }
 
 func (t *Tunnel) fail(context string, err error) error {
@@ -181,14 +247,19 @@ func (t *Tunnel) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// Close closes both the stream and control connections.
+// Close closes both the stream and control connections. It is safe to call
+// concurrently with the opening sequence and more than once.
 func (t *Tunnel) Close() error {
+	t.mu.Lock()
+	stream, control := t.stream, t.control
+	t.mu.Unlock()
+
 	var streamErr, controlErr error
-	if t.stream != nil {
-		streamErr = t.stream.Close()
+	if stream != nil {
+		streamErr = stream.Close()
 	}
-	if t.control != nil {
-		controlErr = t.control.Close()
+	if control != nil {
+		controlErr = control.Close()
 	}
 	if streamErr != nil {
 		return streamErr

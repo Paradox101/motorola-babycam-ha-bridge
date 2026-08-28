@@ -62,6 +62,20 @@ def validate_addon(root: Path) -> list[str]:
                 errors.append(f"duplicate host {protocol} port: {host_port}")
             host_bindings.add(binding)
 
+    # The Web UI must go through Ingress. A webui: link built from a host port
+    # only works on the local network over plain http, so it breaks for anyone
+    # reaching Home Assistant by domain name, reverse proxy or Nabu Casa.
+    if config.get("webui"):
+        errors.append("webui must not be set; serve the Web UI through ingress instead")
+    if config.get("ingress") is not True:
+        errors.append("ingress must be enabled so the Web UI works off the local network")
+    else:
+        ingress_port = config.get("ingress_port")
+        if not isinstance(ingress_port, int) or not 1 <= ingress_port <= 65535:
+            errors.append("ingress_port must be the container port serving the Web UI")
+        elif str(ingress_port) not in declared_ports:
+            errors.append(f"ingress_port {ingress_port} is not a declared container port")
+
     watchdog = str(config.get("watchdog") or "")
     watchdog_match = re.search(r"\[PORT:(\d+)\]", watchdog)
     if not watchdog_match:
