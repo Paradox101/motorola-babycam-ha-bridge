@@ -1,5 +1,5 @@
 name: Motorola Nursery Bridge
-version: "0.4.0"
+version: "0.5.0"
 slug: vm65_bridge
 description: Publishes compatible Motorola Nursery cameras through Magic WEB2 and optional go2rtc.
 url: https://github.com/Paradox101/motorola-babycam-ha-bridge
@@ -43,6 +43,7 @@ options:
   mqtt_username: ""
   mqtt_password: ""
   mqtt_discovery_prefix: homeassistant
+  temperature_poll_interval: 30
   stream_host: homeassistant.local
   external_stream_port: 8556
   shutdown_timeout: 10
@@ -58,6 +59,7 @@ schema:
   mqtt_username: str
   mqtt_password: password
   mqtt_discovery_prefix: str
+  temperature_poll_interval: int(10,3600)
   stream_host: str
   external_stream_port: port
   shutdown_timeout: int(1,120)

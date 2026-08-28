@@ -231,6 +231,58 @@ func TestExternalModeCameraStillGetsALinkSensorButNoImage(t *testing.T) {
 	}
 }
 
+func TestTemperatureSensorPublishesCelsiusAndDedicatedAvailability(t *testing.T) {
+	service, fake := newTestService(t)
+	if err := service.Upsert(context.Background(), bundledCamera()); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.SetTemperatureSupported(context.Background(), "camera-a", true); err != nil {
+		t.Fatal(err)
+	}
+	sensor := fake.config(t, "homeassistant/sensor/camera-a_temperature/config")
+	if sensor["device_class"] != "temperature" || sensor["state_class"] != "measurement" || sensor["unit_of_measurement"] != "°C" {
+		t.Fatalf("temperature sensor = %#v", sensor)
+	}
+	if sensor["state_topic"] != "motorola-nursery-bridge/camera/camera-a/temperature" || sensor["availability_mode"] != "all" {
+		t.Fatalf("temperature topics = %#v", sensor)
+	}
+	if entries := sensor["availability"].([]any); len(entries) != 2 {
+		t.Fatalf("temperature availability = %#v", entries)
+	}
+	if err := service.PublishTemperature(context.Background(), "camera-a", 21.4); err != nil {
+		t.Fatal(err)
+	}
+	if value, _ := fake.last("motorola-nursery-bridge/camera/camera-a/temperature"); string(value) != "21.4" {
+		t.Fatalf("temperature state = %q", value)
+	}
+	if value, _ := fake.last("motorola-nursery-bridge/camera/camera-a/temperature_availability"); string(value) != "online" {
+		t.Fatalf("temperature availability = %q", value)
+	}
+}
+
+func TestUnsupportedTemperatureRetiresSensor(t *testing.T) {
+	service, fake := newTestService(t)
+	if err := service.Upsert(context.Background(), bundledCamera()); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.SetTemperatureSupported(context.Background(), "camera-a", true); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.SetTemperatureSupported(context.Background(), "camera-a", false); err != nil {
+		t.Fatal(err)
+	}
+	for _, topic := range []string{
+		"homeassistant/sensor/camera-a_temperature/config",
+		"motorola-nursery-bridge/camera/camera-a/temperature",
+		"motorola-nursery-bridge/camera/camera-a/temperature_availability",
+	} {
+		payload, ok := fake.last(topic)
+		if !ok || len(payload) != 0 {
+			t.Fatalf("%s was not retired, payload=%q", topic, payload)
+		}
+	}
+}
+
 func TestServiceRepublishesEverythingAfterReconnect(t *testing.T) {
 	service, fake := newTestService(t)
 	cameras := []Camera{

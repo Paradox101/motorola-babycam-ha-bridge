@@ -22,6 +22,7 @@ MQTT_PORT=$(bashio::config 'mqtt_port')
 MQTT_USERNAME=$(bashio::config 'mqtt_username')
 MQTT_PASSWORD=$(bashio::config 'mqtt_password')
 MQTT_PREFIX=$(bashio::config 'mqtt_discovery_prefix')
+TEMPERATURE_POLL_INTERVAL=$(bashio::config 'temperature_poll_interval')
 STREAM_HOST=$(bashio::config 'stream_host')
 EXTERNAL_STREAM_PORT=$(bashio::config 'external_stream_port')
 SHUTDOWN_TIMEOUT=$(bashio::config 'shutdown_timeout')
@@ -121,7 +122,7 @@ if [[ "${STREAM_BACKEND}" == "external" ]]; then STREAM_PORT=${EXTERNAL_STREAM_P
 BRIDGE_ARGS=(-listen "${BRIDGE_LISTEN}" -status 0.0.0.0:8557 -creds "${CREDS}" -registry "${REGISTRY}" -stream-url "rtsp://${STREAM_HOST}:${STREAM_PORT}/vm65" -shutdown-timeout "${SHUTDOWN_TIMEOUT}s")
 BRIDGE_ARGS+=( -go2rtc-required -go2rtc-url "http://127.0.0.1:1984/" )
 if [[ "${MQTT_DISCOVERY}" == "true" ]]; then
-  BRIDGE_ARGS+=( -mqtt-host "${MQTT_HOST}" -mqtt-port "${MQTT_PORT}" -mqtt-username "${MQTT_USERNAME}" -mqtt-discovery-prefix "${MQTT_PREFIX}" )
+  BRIDGE_ARGS+=( -mqtt-host "${MQTT_HOST}" -mqtt-port "${MQTT_PORT}" -mqtt-username "${MQTT_USERNAME}" -mqtt-discovery-prefix "${MQTT_PREFIX}" -temperature-poll-interval "${TEMPERATURE_POLL_INTERVAL}s" )
   # Snapshots are served by the bundled go2rtc; in external mode the media
   # server owns them, so no snapshot URL is advertised.
   if [[ "${STREAM_BACKEND}" != "external" ]]; then

@@ -29,18 +29,20 @@ type ProviderConfig struct {
 // CameraCredentials contains all values needed to expose one compatible
 // Motorola Nursery camera. Model is descriptive and never used as a filter.
 type CameraCredentials struct {
-	DeviceID    uint32 `json:"device_id"`
-	DeviceUDID  string `json:"device_udid"`
-	DeviceName  string `json:"device_name"`
-	Model       string `json:"model"`
-	SID         string `json:"sid"`
-	DeviceToken string `json:"device_token"`
-	ControlHost string `json:"control_host"`
-	ControlPort int    `json:"control_port"`
-	TargetPort  int    `json:"target_port"`
-	AccessToken string `json:"access_token"`
-	RTSPUser    string `json:"rtsp_user"`
-	RTSPPass    string `json:"rtsp_password"`
+	DeviceID      uint32 `json:"device_id"`
+	DeviceUDID    string `json:"device_udid"`
+	DeviceName    string `json:"device_name"`
+	Model         string `json:"model"`
+	SID           string `json:"sid"`
+	DeviceToken   string `json:"device_token"`
+	ControlHost   string `json:"control_host"`
+	ControlPort   int    `json:"control_port"`
+	TargetPort    int    `json:"target_port"`
+	DeviceAPIHost string `json:"device_api_host"`
+	DeviceAPIPort int    `json:"device_api_port"`
+	AccessToken   string `json:"access_token"`
+	RTSPUser      string `json:"rtsp_user"`
+	RTSPPass      string `json:"rtsp_password"`
 }
 
 type Provider struct {
@@ -96,24 +98,30 @@ func (p *Provider) restore(ctx context.Context) ([]CameraCredentials, error) {
 		return nil, fmt.Errorf("restore account session: %w", err)
 	}
 
+	deviceAPIHost := state.Session.Domain
+	if deviceAPIHost == "" {
+		deviceAPIHost = DefaultHost
+	}
 	cameras := make([]CameraCredentials, 0, len(devices))
 	for _, device := range devices {
 		if device.ID == 0 || device.UDID == "" || device.SID == "" || device.DeviceToken == "" {
 			continue
 		}
 		cameras = append(cameras, CameraCredentials{
-			DeviceID:    device.ID,
-			DeviceUDID:  device.UDID,
-			DeviceName:  device.Name,
-			Model:       device.Model,
-			SID:         device.SID,
-			DeviceToken: device.DeviceToken,
-			ControlHost: p.cfg.RelayHost,
-			ControlPort: 8800,
-			TargetPort:  TargetPort,
-			AccessToken: OwnerAccessToken(device.DeviceToken),
-			RTSPUser:    "Pascal",
-			RTSPPass:    "5GenCare.com",
+			DeviceID:      device.ID,
+			DeviceUDID:    device.UDID,
+			DeviceName:    device.Name,
+			Model:         device.Model,
+			SID:           device.SID,
+			DeviceToken:   device.DeviceToken,
+			ControlHost:   p.cfg.RelayHost,
+			ControlPort:   8800,
+			TargetPort:    TargetPort,
+			DeviceAPIHost: deviceAPIHost,
+			DeviceAPIPort: DeviceAPIPort,
+			AccessToken:   OwnerAccessToken(device.DeviceToken),
+			RTSPUser:      "Pascal",
+			RTSPPass:      "5GenCare.com",
 		})
 	}
 	sort.Slice(cameras, func(i, j int) bool { return cameras[i].DeviceUDID < cameras[j].DeviceUDID })
