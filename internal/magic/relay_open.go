@@ -3,8 +3,10 @@
 package magic
 
 import (
+	"bufio"
 	"errors"
 	"fmt"
+	"io"
 	"strconv"
 	"strings"
 )
@@ -90,6 +92,43 @@ func ParseRelayOpen(data []byte) (RelayOpen, error) {
 		return RelayOpen{}, err
 	}
 	return result, nil
+}
+
+// ReadRelayOpenFrame consumes exactly one relay-open frame from br and returns
+// it parsed. The frame carries its own magic-UUID and session-name lengths and
+// has no trailing delimiter, so a reader must use those lengths to stop exactly
+// at the frame boundary and leave any following stream bytes buffered in br.
+// This is the receive-side counterpart to RelayOpen.MarshalText: because the
+// sender may emit the frame and the first stream bytes back to back, a naive
+// single Read can capture both and fail to parse; framing by length avoids that.
+func ReadRelayOpenFrame(br *bufio.Reader) (RelayOpen, error) {
+	const headerLen = 19 // "v" + 3 + " " + 3 + " " + 5 + " " + 3 + " "
+	header := make([]byte, headerLen)
+	if _, err := io.ReadFull(br, header); err != nil {
+		return RelayOpen{}, fmt.Errorf("read relay-open header: %w", err)
+	}
+	magicLen, err := fixedDecimal(header, 15, 3, "magic UUID length")
+	if err != nil {
+		return RelayOpen{}, err
+	}
+	// magic UUID + " " + 4-digit session-name length + " ".
+	mid := make([]byte, magicLen+6)
+	if _, err := io.ReadFull(br, mid); err != nil {
+		return RelayOpen{}, fmt.Errorf("read relay-open magic uuid and session length: %w", err)
+	}
+	sessionLen, err := fixedDecimal(mid, magicLen+1, 4, "session-name length")
+	if err != nil {
+		return RelayOpen{}, err
+	}
+	name := make([]byte, sessionLen)
+	if _, err := io.ReadFull(br, name); err != nil {
+		return RelayOpen{}, fmt.Errorf("read relay-open session name: %w", err)
+	}
+	full := make([]byte, 0, headerLen+len(mid)+len(name))
+	full = append(full, header...)
+	full = append(full, mid...)
+	full = append(full, name...)
+	return ParseRelayOpen(full)
 }
 
 func fixedDecimal(data []byte, offset, width int, name string) (int, error) {

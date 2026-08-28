@@ -2,6 +2,7 @@ package magic
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"net"
 	"testing"
@@ -64,20 +65,18 @@ func (r *fakeRelay) serve() {
 		return
 	}
 
-	// 2. Stream connection: read the relay-open frame, then act as the peer.
+	// 2. Stream connection: frame the relay-open by length, then act as the
+	//    peer. The frame carries no delimiter and may share a TCP segment with
+	//    the first stream bytes, so read it via ReadRelayOpenFrame rather than a
+	//    single naive Read (which was the cause of intermittent hangs).
 	stream, err := r.listener.Accept()
 	if err != nil {
 		r.fail(err)
 		return
 	}
 	defer stream.Close()
-	buf := make([]byte, 4096)
-	n, err := stream.Read(buf)
-	if err != nil {
-		r.fail(err)
-		return
-	}
-	open, err := ParseRelayOpen(buf[:n])
+	br := bufio.NewReader(stream)
+	open, err := ReadRelayOpenFrame(br)
 	if err != nil {
 		r.fail(err)
 		return
@@ -95,18 +94,25 @@ func (r *fakeRelay) serve() {
 		return
 	}
 
-	// Read the client's first plaintext write (bootstrap + payload).
-	n, err = stream.Read(buf)
-	if err != nil {
-		r.fail(err)
-		return
+	// Read the client's plaintext request. The token bootstrap and the request
+	// may span multiple reads, so decode in a loop until the full request (an
+	// RTSP message terminated by a blank line) is recovered.
+	var request []byte
+	buf := make([]byte, 4096)
+	for !bytes.HasSuffix(request, []byte("\r\n\r\n")) {
+		n, err := br.Read(buf)
+		if err != nil {
+			r.fail(err)
+			return
+		}
+		plain, err := decoder.Decode(buf[:n])
+		if err != nil {
+			r.fail(err)
+			return
+		}
+		request = append(request, plain...)
 	}
-	plain, err := decoder.Decode(buf[:n])
-	if err != nil {
-		r.fail(err)
-		return
-	}
-	r.gotRequest <- plain
+	r.gotRequest <- request
 
 	// Reply through the inverse direction's crypto.
 	cipher, err := encoder.Encode(r.serverReply)

@@ -1,0 +1,42 @@
+---
+name: Motorola Magic Bridge
+version: "0.1.0"
+slug: motorola_magic_bridge
+description: >-
+  Expose a Motorola/5GenCare (Magic WEB2) camera as a local RTSP/go2rtc stream
+  without the Android app. Reconstructs only the proven Magic transport; it does
+  not perform 5GenCare authorization (see DOCS.md).
+url: "https://github.com/local/motorola-vm65-bridge"
+arch:
+  - amd64
+  - aarch64
+  - armv7
+startup: application
+boot: manual
+init: false
+ports:
+  8554/tcp: 8554
+  1984/tcp: 1984
+ports_description:
+  8554/tcp: RTSP stream served by go2rtc
+  1984/tcp: go2rtc web UI and API
+options:
+  device_id: 0
+  sid: ""
+  device_token: ""
+  control_host: ""
+  target_port: 6667
+  rtsp_user: ""
+  rtsp_password: ""
+  rtsp_path: "/owner/streaming"
+  access_token: ""
+schema:
+  device_id: int(0,)
+  sid: password
+  device_token: password
+  control_host: str
+  target_port: port
+  rtsp_user: str?
+  rtsp_password: password?
+  rtsp_path: str
+  access_token: password?

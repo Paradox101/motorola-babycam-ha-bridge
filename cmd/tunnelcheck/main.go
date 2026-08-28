@@ -10,7 +10,6 @@ package main
 
 import (
 	"context"
-	"crypto/rand"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -58,7 +57,7 @@ func run(credsPath string, timeout time.Duration, readonly bool, predelay time.D
 	if err != nil {
 		return fmt.Errorf("derive magic uuid: %w", err)
 	}
-	sessionName := freshSessionName()
+	sessionName := magic.NewSessionName()
 
 	fmt.Printf("control host : %s:%d\n", c.ControlHost, magic.ControlPortDefault)
 	fmt.Printf("device id    : %d\n", c.DeviceID)
@@ -122,14 +121,4 @@ func run(credsPath string, timeout time.Duration, readonly bool, predelay time.D
 	fmt.Printf("\n--- decoded RTSP response (%d bytes) ---\n%s\n", n, buf[:n])
 	fmt.Println("SUCCESS: byte-transparent Magic WEB2 tunnel established and camera responded.")
 	return nil
-}
-
-// freshSessionName returns a canonical 36-char UUID used as the client session
-// label in the app-discovery request.
-func freshSessionName() string {
-	var b [16]byte
-	_, _ = rand.Read(b[:])
-	b[6] = (b[6] & 0x0f) | 0x40
-	b[8] = (b[8] & 0x3f) | 0x80
-	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
 }
