@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/url"
 	"sort"
 	"strconv"
@@ -92,13 +93,15 @@ type brokerClient interface {
 type clientFactory func(clientConfig) brokerClient
 
 type Service struct {
-	mu        sync.RWMutex
-	config    Config
-	client    brokerClient
-	connected bool
-	cameras   map[string]Camera
-	available map[string]bool
-	status    Status
+	mu                   sync.RWMutex
+	config               Config
+	client               brokerClient
+	connected            bool
+	cameras              map[string]Camera
+	available            map[string]bool
+	temperatureSupported map[string]bool
+	temperatureAvailable map[string]bool
+	status               Status
 
 	availability string
 	base         string
@@ -121,13 +124,73 @@ func newService(config Config, factory clientFactory) *Service {
 	}
 	availability := config.BaseTopic + "/availability"
 	return &Service{
-		config:       config,
-		client:       factory(clientConfig{Config: config, WillTopic: availability, WillPayload: payloadOffline}),
-		cameras:      make(map[string]Camera),
-		available:    make(map[string]bool),
-		availability: availability,
-		base:         config.BaseTopic,
+		config:               config,
+		client:               factory(clientConfig{Config: config, WillTopic: availability, WillPayload: payloadOffline}),
+		cameras:              make(map[string]Camera),
+		available:            make(map[string]bool),
+		temperatureSupported: make(map[string]bool),
+		temperatureAvailable: make(map[string]bool),
+		availability:         availability,
+		base:                 config.BaseTopic,
 	}
+}
+
+// SetTemperatureSupported creates or retires the temperature entity for one
+// camera after its device-control capability list has been read.
+func (s *Service) SetTemperatureSupported(ctx context.Context, id string, supported bool) error {
+	s.mu.Lock()
+	camera, known := s.cameras[id]
+	if !known {
+		s.mu.Unlock()
+		return errors.New("mqtt temperature camera is not registered")
+	}
+	s.temperatureSupported[id] = supported
+	if !supported {
+		delete(s.temperatureAvailable, id)
+	}
+	available := s.temperatureAvailable[id]
+	connected := s.connected
+	s.mu.Unlock()
+	if !connected {
+		return nil
+	}
+	return s.publishTemperatureEntity(ctx, camera, supported, available)
+}
+
+// SetTemperatureAvailable updates only the control link availability. It is
+// deliberately separate from media availability because either connection can
+// fail without the other one failing.
+func (s *Service) SetTemperatureAvailable(ctx context.Context, id string, available bool) error {
+	s.mu.Lock()
+	supported := s.temperatureSupported[id]
+	previous, known := s.temperatureAvailable[id]
+	s.temperatureAvailable[id] = available
+	connected := s.connected
+	s.mu.Unlock()
+	if !supported || !connected || (known && previous == available) {
+		return nil
+	}
+	return s.client.Publish(ctx, s.cameraTopic(id, "temperature_availability"), true, []byte(availabilityPayload(available)))
+}
+
+// PublishTemperature publishes a numeric Celsius state and marks its control
+// connection available after a successful request.
+func (s *Service) PublishTemperature(ctx context.Context, id string, celsius float64) error {
+	if math.IsNaN(celsius) || math.IsInf(celsius, 0) || celsius <= 0 || celsius >= 50 {
+		return errors.New("mqtt temperature must be between 0 and 50 Celsius")
+	}
+	s.mu.Lock()
+	supported := s.temperatureSupported[id]
+	connected := s.connected
+	s.temperatureAvailable[id] = true
+	s.mu.Unlock()
+	if !supported || !connected {
+		return nil
+	}
+	return errors.Join(
+		s.client.Publish(ctx, s.cameraTopic(id, "temperature"), true, []byte(strconv.FormatFloat(celsius, 'f', -1, 64))),
+		s.client.Publish(ctx, s.cameraTopic(id, "temperature_availability"), true, []byte(payloadOnline)),
+	)
 }
 
 func (s *Service) Start(ctx context.Context) error {
@@ -205,6 +268,8 @@ func (s *Service) Remove(ctx context.Context, id string) error {
 	s.mu.Lock()
 	delete(s.cameras, id)
 	delete(s.available, id)
+	delete(s.temperatureSupported, id)
+	delete(s.temperatureAvailable, id)
 	connected := s.connected
 	s.mu.Unlock()
 	if !connected {
@@ -215,6 +280,9 @@ func (s *Service) Remove(ctx context.Context, id string) error {
 	for _, topic := range []string{
 		s.discoveryTopic("image", object),
 		s.discoveryTopic("binary_sensor", object+"_link"),
+		s.discoveryTopic("sensor", object+"_temperature"),
+		s.cameraTopic(id, "temperature"),
+		s.cameraTopic(id, "temperature_availability"),
 	} {
 		errs = append(errs, s.client.Publish(ctx, topic, true, nil))
 	}
@@ -309,6 +377,8 @@ func (s *Service) publishCamera(ctx context.Context, camera Camera) error {
 
 	s.mu.RLock()
 	available := s.available[camera.ID]
+	temperatureSupported := s.temperatureSupported[camera.ID]
+	temperatureAvailable := s.temperatureAvailable[camera.ID]
 	s.mu.RUnlock()
 
 	var errs []error
@@ -360,8 +430,35 @@ func (s *Service) publishCamera(ctx context.Context, camera Camera) error {
 	// requires an image `topic` and has no stream_source key, so no entity was
 	// ever created. Clear the retained payload so brokers stop replaying it.
 	errs = append(errs, s.client.Publish(ctx, s.discoveryTopic("camera", object), true, nil))
+	errs = append(errs, s.publishTemperatureEntity(ctx, camera, temperatureSupported, temperatureAvailable))
 
 	return errors.Join(errs...)
+}
+
+func (s *Service) publishTemperatureEntity(ctx context.Context, camera Camera, supported, available bool) error {
+	object := objectID(camera.ID)
+	if !supported {
+		return errors.Join(
+			s.client.Publish(ctx, s.discoveryTopic("sensor", object+"_temperature"), true, nil),
+			s.client.Publish(ctx, s.cameraTopic(camera.ID, "temperature"), true, nil),
+			s.client.Publish(ctx, s.cameraTopic(camera.ID, "temperature_availability"), true, nil),
+		)
+	}
+	sensor := entity{
+		Name:             "Temperature",
+		UniqueID:         camera.ID + "_temperature",
+		StateTopic:       s.cameraTopic(camera.ID, "temperature"),
+		DeviceClass:      "temperature",
+		StateClass:       "measurement",
+		UnitOfMeasure:    "°C",
+		Availability:     append(s.bridgeAvailability(), availability{Topic: s.cameraTopic(camera.ID, "temperature_availability"), PayloadAvailable: payloadOnline, PayloadUnavailable: payloadOffline}),
+		AvailabilityMode: "all",
+		Device:           s.cameraDevice(camera),
+	}
+	return errors.Join(
+		s.publishEntity(ctx, "sensor", object+"_temperature", sensor),
+		s.client.Publish(ctx, s.cameraTopic(camera.ID, "temperature_availability"), true, []byte(availabilityPayload(available))),
+	)
 }
 
 func (s *Service) publishStatus(ctx context.Context, status Status) error {

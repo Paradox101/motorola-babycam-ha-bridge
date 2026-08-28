@@ -14,9 +14,10 @@ import (
 )
 
 const (
-	DefaultHost = "primary.moto.5gencare.com"
-	DefaultPort = 3388
-	TargetPort  = 6667
+	DefaultHost   = "primary.moto.5gencare.com"
+	DefaultPort   = 3388
+	TargetPort    = 6667
+	DeviceAPIPort = 2288
 )
 
 type Session struct {

@@ -11,6 +11,7 @@ setup() {
   export TEST_MQTT_DISCOVERY=false
   export TEST_REFRESH_INTERVAL=60
   export TEST_MQTT_SERVICE=false
+  export TEST_TEMPERATURE_POLL_INTERVAL=30
 
   bashio::config() {
     case "$1" in
@@ -22,6 +23,7 @@ setup() {
       mqtt_host) printf 'core-mosquitto' ;;
       mqtt_port) printf '1883' ;;
       mqtt_discovery_prefix) printf 'homeassistant' ;;
+      temperature_poll_interval) printf '%s' "${TEST_TEMPERATURE_POLL_INTERVAL}" ;;
       stream_host) printf 'homeassistant.local' ;;
       external_stream_port) printf '8556' ;;
       shutdown_timeout) printf '1' ;;
@@ -132,4 +134,12 @@ EOF
   run bash homeassistant/vm65-bridge/run.sh
   [ "$status" -eq 7 ]
   ! grep -q -- '-snapshot-url-base' "$CALL_LOG"
+}
+
+@test "MQTT discovery forwards the configurable temperature interval" {
+  export TEST_MQTT_DISCOVERY=true
+  export TEST_TEMPERATURE_POLL_INTERVAL=45
+  run bash homeassistant/vm65-bridge/run.sh
+  [ "$status" -eq 7 ]
+  grep -q -- '-temperature-poll-interval 45s' "$CALL_LOG"
 }

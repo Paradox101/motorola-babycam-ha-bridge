@@ -3,6 +3,7 @@ package config
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestLoadDefaults(t *testing.T) {
@@ -21,6 +22,23 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if cfg.Go2RTCRequired {
 		t.Fatal("go2rtc must be optional by default")
+	}
+}
+
+func TestLoadValidatesTemperaturePollInterval(t *testing.T) {
+	cfg, err := Load([]string{"-temperature-poll-interval", "45s"}, nil)
+	if err != nil || cfg.TemperaturePollInterval != 45*time.Second {
+		t.Fatalf("temperature interval = %s, error = %v", cfg.TemperaturePollInterval, err)
+	}
+	for _, value := range []string{"10s", "1h"} {
+		if _, err := Load([]string{"-temperature-poll-interval", value}, nil); err != nil {
+			t.Fatalf("valid temperature interval %s rejected: %v", value, err)
+		}
+	}
+	for _, value := range []string{"9s", "1h1s"} {
+		if _, err := Load([]string{"-temperature-poll-interval", value}, nil); err == nil {
+			t.Fatalf("invalid temperature interval %s accepted", value)
+		}
 	}
 }
 

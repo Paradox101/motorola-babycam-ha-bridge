@@ -33,7 +33,7 @@ func TestProviderReturnsEveryEligibleCameraInStableOrder(t *testing.T) {
 	store := NewStore(path)
 	if err := store.Save(State{
 		DeviceUUID: "device-uuid",
-		Session:    &Session{UserID: 42, SessionToken: "token", SessionID: "session"},
+		Session:    &Session{UserID: 42, SessionToken: "token", SessionID: "session", Domain: "shard.example"},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -56,6 +56,9 @@ func TestProviderReturnsEveryEligibleCameraInStableOrder(t *testing.T) {
 	}
 	if cameras[1].Model != "MBP99" {
 		t.Fatalf("non-VM65 model was not preserved: %#v", cameras[1])
+	}
+	if cameras[0].DeviceAPIHost != "shard.example" || cameras[0].DeviceAPIPort != 2288 {
+		t.Fatalf("device API endpoint = %s:%d", cameras[0].DeviceAPIHost, cameras[0].DeviceAPIPort)
 	}
 }
 

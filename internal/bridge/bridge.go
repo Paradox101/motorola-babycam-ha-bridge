@@ -34,15 +34,17 @@ const DefaultTargetPort = 6667
 // The bridge treats them as opaque inputs: it derives the magicUuid from them
 // but never fabricates, refreshes or persists them.
 type Credentials struct {
-	DeviceID    uint32 // numeric device id
-	SID         string // camera SID from device discovery
-	DeviceToken string // opaque device token; also the tunnel crypto key
-	DeviceUDID  string // stable camera identifier for integrations
-	DeviceName  string // display name for integrations
-	Model       string // device-reported model; informational, never filtered
-	ControlHost string // Magic relay control host
-	ControlPort int    // defaults to magic.ControlPortDefault when zero
-	TargetPort  int    // defaults to DefaultTargetPort when zero
+	DeviceID      uint32 // numeric device id
+	SID           string // camera SID from device discovery
+	DeviceToken   string // opaque device token; also the tunnel crypto key
+	DeviceUDID    string // stable camera identifier for integrations
+	DeviceName    string // display name for integrations
+	Model         string // device-reported model; informational, never filtered
+	ControlHost   string // Magic relay control host
+	ControlPort   int    // defaults to magic.ControlPortDefault when zero
+	TargetPort    int    // defaults to DefaultTargetPort when zero
+	DeviceAPIHost string // 5GenCare device-control TLS hostname
+	DeviceAPIPort int    // defaults to fivegencare.DeviceAPIPort when zero
 }
 
 func (c Credentials) validate() error {

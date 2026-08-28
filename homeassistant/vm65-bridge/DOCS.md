@@ -47,6 +47,7 @@ diagnostics, plus one device per camera:
 | Bridge restarts | sensor | How often a camera bridge had to be restarted |
 | `<camera>` Link | binary_sensor | Whether that one camera is reachable |
 | `<camera>` Snapshot | image | A still frame, in bundled mode |
+| `<camera>` Temperature | sensor | Ambient temperature reported by supported cameras |
 
 If the Mosquitto add-on is installed the broker address and credentials come
 from Home Assistant automatically; fill in the `mqtt_*` options only to point at
@@ -91,6 +92,7 @@ IP address of the Home Assistant host.
 | `mqtt_host`, `mqtt_port` | MQTT broker address |
 | `mqtt_username`, `mqtt_password` | Optional broker credentials |
 | `mqtt_discovery_prefix` | Discovery prefix, normally `homeassistant` |
+| `temperature_poll_interval` | Seconds between temperature readings (10–3600, default 30) |
 | `stream_host` | Hostname advertised in MQTT RTSP URLs |
 | `external_stream_port` | Host port advertised in external mode |
 | `shutdown_timeout` | Graceful child-process shutdown limit in seconds |

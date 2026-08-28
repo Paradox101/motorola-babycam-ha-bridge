@@ -23,17 +23,18 @@ type MQTT struct {
 
 // Config is the validated long-running bridge configuration.
 type Config struct {
-	ListenAddr      string
-	CredentialsPath string
-	RegistryPath    string
-	StatusAddr      string
-	Verbose         bool
-	MQTT            MQTT
-	StreamURL       string
-	SnapshotBase    string
-	Go2RTCRequired  bool
-	Go2RTCURL       string
-	ShutdownTimeout time.Duration
+	ListenAddr              string
+	CredentialsPath         string
+	RegistryPath            string
+	StatusAddr              string
+	Verbose                 bool
+	MQTT                    MQTT
+	StreamURL               string
+	SnapshotBase            string
+	Go2RTCRequired          bool
+	Go2RTCURL               string
+	ShutdownTimeout         time.Duration
+	TemperaturePollInterval time.Duration
 }
 
 // Load parses command-line arguments, applies secret environment overrides,
@@ -60,6 +61,7 @@ func Load(args []string, lookupEnv func(string) (string, bool)) (Config, error) 
 	flags.BoolVar(&cfg.Go2RTCRequired, "go2rtc-required", false, "require a reachable go2rtc endpoint for readiness")
 	flags.StringVar(&cfg.Go2RTCURL, "go2rtc-url", "http://127.0.0.1:1984/", "go2rtc readiness endpoint")
 	flags.DurationVar(&cfg.ShutdownTimeout, "shutdown-timeout", 10*time.Second, "graceful shutdown timeout")
+	flags.DurationVar(&cfg.TemperaturePollInterval, "temperature-poll-interval", 30*time.Second, "temperature polling interval when MQTT discovery is enabled")
 	if err := flags.Parse(args); err != nil {
 		return Config{}, fmt.Errorf("parse configuration: %w", err)
 	}
@@ -91,6 +93,9 @@ func (c Config) Validate() error {
 	}
 	if c.ShutdownTimeout <= 0 {
 		return errors.New("shutdown timeout must be positive")
+	}
+	if c.TemperaturePollInterval < 10*time.Second || c.TemperaturePollInterval > time.Hour {
+		return errors.New("temperature poll interval must be between 10s and 1h")
 	}
 	if c.Go2RTCRequired {
 		parsed, err := url.Parse(c.Go2RTCURL)
@@ -135,7 +140,7 @@ func validateAddress(name, address string) error {
 // Redacted returns a log-safe configuration summary.
 func (c Config) Redacted() string {
 	return fmt.Sprintf(
-		"listen=%q status=%q credentials=%q registry=%q mqtt_host=%q mqtt_port=%d mqtt_user_set=%t mqtt_password_set=%t stream_url=%q snapshot_base=%q go2rtc_required=%t go2rtc_url=%q shutdown_timeout=%s",
+		"listen=%q status=%q credentials=%q registry=%q mqtt_host=%q mqtt_port=%d mqtt_user_set=%t mqtt_password_set=%t stream_url=%q snapshot_base=%q go2rtc_required=%t go2rtc_url=%q shutdown_timeout=%s temperature_poll_interval=%s",
 		c.ListenAddr,
 		c.StatusAddr,
 		c.CredentialsPath,
@@ -149,5 +154,6 @@ func (c Config) Redacted() string {
 		c.Go2RTCRequired,
 		c.Go2RTCURL,
 		c.ShutdownTimeout,
+		c.TemperaturePollInterval,
 	)
 }

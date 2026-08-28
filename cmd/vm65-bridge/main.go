@@ -28,6 +28,7 @@ import (
 	"github.com/local/motorola-vm65-bridge/internal/bridge"
 	"github.com/local/motorola-vm65-bridge/internal/buildinfo"
 	appconfig "github.com/local/motorola-vm65-bridge/internal/config"
+	"github.com/local/motorola-vm65-bridge/internal/devicecontrol"
 	"github.com/local/motorola-vm65-bridge/internal/health"
 	"github.com/local/motorola-vm65-bridge/internal/mqttdiscovery"
 )
@@ -35,15 +36,17 @@ import (
 // credsFile is the on-disk shape of the credentials. It mirrors the fields
 // cmd/tunnelcheck already reads, so the same local file works for both.
 type credsFile struct {
-	DeviceID    uint32 `json:"device_id"`
-	DeviceUDID  string `json:"device_udid"`
-	DeviceName  string `json:"device_name"`
-	Model       string `json:"model"`
-	SID         string `json:"sid"`
-	DeviceToken string `json:"device_token"`
-	ControlHost string `json:"control_host"`
-	ControlPort int    `json:"control_port"`
-	TargetPort  int    `json:"target_port"`
+	DeviceID      uint32 `json:"device_id"`
+	DeviceUDID    string `json:"device_udid"`
+	DeviceName    string `json:"device_name"`
+	Model         string `json:"model"`
+	SID           string `json:"sid"`
+	DeviceToken   string `json:"device_token"`
+	ControlHost   string `json:"control_host"`
+	ControlPort   int    `json:"control_port"`
+	TargetPort    int    `json:"target_port"`
+	DeviceAPIHost string `json:"device_api_host"`
+	DeviceAPIPort int    `json:"device_api_port"`
 }
 
 func main() {
@@ -102,6 +105,7 @@ func run(cfg appconfig.Config, logger *slog.Logger) error {
 		startHealthServer(ctx, cfg.StatusAddr, health.NewHandler(healthState), logger)
 	}
 	var discovery *mqttdiscovery.Service
+	var temperatureSupervisor *devicecontrol.Supervisor
 	publisher := &discoveryPublisher{}
 	healthState.SetMQTT(cfg.MQTT.Host != "", false)
 	if cfg.MQTT.Host != "" && primary.DeviceUDID != "" && cfg.StreamURL != "" {
@@ -133,6 +137,13 @@ func run(cfg appconfig.Config, logger *slog.Logger) error {
 				defer cancel()
 				_ = discovery.Close(shutdownContext)
 			}()
+			temperatureSupervisor = devicecontrol.NewSupervisor(ctx, devicecontrol.SupervisorConfig{
+				Client:       devicecontrol.Client{},
+				Sink:         discovery,
+				PollInterval: cfg.TemperaturePollInterval,
+			})
+			temperatureSupervisor.Reconcile(temperatureCameras(registry))
+			defer temperatureSupervisor.Close()
 		}
 	}
 
@@ -143,7 +154,7 @@ func run(cfg appconfig.Config, logger *slog.Logger) error {
 	// SIGHUP swaps in freshly written credentials. Cameras whose credentials did
 	// not change keep streaming, so the periodic refresh no longer costs every
 	// viewer their picture.
-	go watchForReload(ctx, cfg, runtime, publisher, logger, healthState)
+	go watchForReload(ctx, cfg, runtime, publisher, temperatureSupervisor, logger, healthState)
 
 	// Keep the diagnostic entities and per-camera availability in step with the
 	// runtime, so Home Assistant shows which camera is down instead of leaving
@@ -201,7 +212,7 @@ func mirrorStateToMQTT(ctx context.Context, service *mqttdiscovery.Service, runt
 }
 
 // watchForReload applies a new credential file on SIGHUP until ctx is done.
-func watchForReload(ctx context.Context, cfg appconfig.Config, runtime *app.Runtime, publisher *discoveryPublisher, logger *slog.Logger, healthState *health.State) {
+func watchForReload(ctx context.Context, cfg appconfig.Config, runtime *app.Runtime, publisher *discoveryPublisher, temperatureSupervisor *devicecontrol.Supervisor, logger *slog.Logger, healthState *health.State) {
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, syscall.SIGHUP)
 	defer signal.Stop(signals)
@@ -232,9 +243,27 @@ func watchForReload(ctx context.Context, cfg appconfig.Config, runtime *app.Runt
 				logger.Error("MQTT discovery refresh failed", "err", err)
 				healthState.SetLastError(health.ErrorBroker)
 			}
+			if temperatureSupervisor != nil {
+				temperatureSupervisor.Reconcile(temperatureCameras(registry))
+			}
 			logger.Info("credential reload complete", "cameras", len(registry.Cameras))
 		}
 	}
+}
+
+func temperatureCameras(registry app.Registry) []devicecontrol.Camera {
+	cameras := make([]devicecontrol.Camera, 0, len(registry.Cameras))
+	for _, camera := range registry.Cameras {
+		credentials := camera.Credentials
+		if credentials.DeviceUDID == "" || credentials.DeviceAPIHost == "" || credentials.DeviceAPIPort < 1 || credentials.DeviceToken == "" {
+			continue
+		}
+		cameras = append(cameras, devicecontrol.Camera{
+			ID: credentials.DeviceUDID, DeviceID: credentials.DeviceID, Token: credentials.DeviceToken,
+			Host: credentials.DeviceAPIHost, Port: credentials.DeviceAPIPort,
+		})
+	}
+	return cameras
 }
 
 // discoveryPublisher keeps the retained MQTT discovery topics in step with the
@@ -411,14 +440,16 @@ func (f credsFile) credentials() (bridge.Credentials, error) {
 		return bridge.Credentials{}, errors.New("credentials file must set sid, device_token and control_host")
 	}
 	return bridge.Credentials{
-		DeviceID:    f.DeviceID,
-		DeviceUDID:  f.DeviceUDID,
-		DeviceName:  f.DeviceName,
-		Model:       f.Model,
-		SID:         f.SID,
-		DeviceToken: f.DeviceToken,
-		ControlHost: f.ControlHost,
-		ControlPort: f.ControlPort,
-		TargetPort:  f.TargetPort,
+		DeviceID:      f.DeviceID,
+		DeviceUDID:    f.DeviceUDID,
+		DeviceName:    f.DeviceName,
+		Model:         f.Model,
+		SID:           f.SID,
+		DeviceToken:   f.DeviceToken,
+		ControlHost:   f.ControlHost,
+		ControlPort:   f.ControlPort,
+		TargetPort:    f.TargetPort,
+		DeviceAPIHost: f.DeviceAPIHost,
+		DeviceAPIPort: f.DeviceAPIPort,
 	}, nil
 }
