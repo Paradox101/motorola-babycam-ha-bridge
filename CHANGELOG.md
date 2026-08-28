@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.1
+
+### Added
+
+- A dedicated Home Assistant add-on icon for Motorola Nursery Bridge.
+
 ## 0.5.0
 
 ### Added

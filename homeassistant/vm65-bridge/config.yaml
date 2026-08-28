@@ -1,5 +1,5 @@
 name: Motorola Nursery Bridge
-version: "0.5.0"
+version: "0.5.1"
 slug: vm65_bridge
 description: Publishes compatible Motorola Nursery cameras through Magic WEB2 and optional go2rtc.
 url: https://github.com/Paradox101/motorola-babycam-ha-bridge
