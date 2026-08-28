@@ -141,14 +141,22 @@ func tokenKey(deviceToken string) ([]byte, error) {
 	return append([]byte(nil), deviceToken...), nil
 }
 
+// randomRange returns a uniformly distributed byte in [minimum, maximum].
+// Rejection sampling keeps the distribution flat; plain modulo would bias the
+// low end of the range whenever the span does not divide 256.
 func randomRange(source io.Reader, minimum, maximum byte) (byte, error) {
 	if minimum > maximum {
 		return 0, errors.New("invalid random range")
 	}
-	var value [1]byte
-	if _, err := io.ReadFull(source, value[:]); err != nil {
-		return 0, err
-	}
 	span := int(maximum) - int(minimum) + 1
-	return byte(int(minimum) + int(value[0])%span), nil
+	limit := 256 - (256 % span)
+	var value [1]byte
+	for {
+		if _, err := io.ReadFull(source, value[:]); err != nil {
+			return 0, err
+		}
+		if int(value[0]) < limit {
+			return byte(int(minimum) + int(value[0])%span), nil
+		}
+	}
 }
