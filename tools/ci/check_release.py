@@ -12,6 +12,11 @@ import yaml
 
 SEMVER_TAG = re.compile(r"^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")
 
+# The add-on builds from this branch rather than from the version tag: a tag
+# cannot exist before the commit that names it, so pinning to one broke every
+# add-on build between the release commit and the tag push.
+RELEASE_BRANCH = "release"
+
 
 def validate_release(root: Path, tag: str) -> list[str]:
     match = SEMVER_TAG.fullmatch(tag)
@@ -27,8 +32,8 @@ def validate_release(root: Path, tag: str) -> list[str]:
 
     dockerfile = (addon / "Dockerfile").read_text(encoding="utf-8")
     source_match = re.search(r"(?m)^ARG SOURCE_REF=(\S+)$", dockerfile)
-    if source_match is None or source_match.group(1) != tag:
-        errors.append(f"Dockerfile SOURCE_REF must equal {tag}")
+    if source_match is None or source_match.group(1) != RELEASE_BRANCH:
+        errors.append(f"Dockerfile SOURCE_REF must equal {RELEASE_BRANCH}")
     return errors
 
 

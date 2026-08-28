@@ -9,17 +9,22 @@ does not publish add-on runtime images.
 1. Choose `X.Y.Z`, update `version` in
    `homeassistant/vm65-bridge/config.yaml` and add the section to
    `CHANGELOG.md`.
-2. Set `ARG SOURCE_REF=vX.Y.Z` in the add-on Dockerfile.
-3. Update user-facing documentation and run the complete verification suite.
-4. Commit the release state.
+2. Update user-facing documentation and run the complete verification suite.
+3. Commit the release state and merge it to `main`.
+4. Move the release branch to that commit: `git push origin main:release`.
+   The add-on builds from this branch, so this is the step that publishes the
+   new code to Home Assistant.
 5. Create an annotated tag: `git tag -a vX.Y.Z -m "Motorola Nursery Bridge X.Y.Z"`.
-6. Push the tag and branch.
+6. Push the tag.
 
-Push the tag immediately after the release commit lands. The add-on Dockerfile
-pins `SOURCE_REF` to that tag, so between the commit and the tag every add-on
-build and update fails to clone it. The build reports this explicitly rather
-than leaving a bare git error. To build before tagging, pass
-`--build-arg SOURCE_REF=main`.
+Step 4 is what add-on users receive; step 5 only produces the GitHub release
+with the prebuilt binaries. They are deliberately independent: the add-on no
+longer depends on a tag existing.
+
+`ARG SOURCE_REF` stays `release` and is never bumped per version. It used to be
+pinned to the version tag, which could not exist until after the commit naming
+it, so every add-on build in that window failed to clone. To build the default
+branch instead, pass `--build-arg SOURCE_REF=main`.
 
 The release workflow rejects lightweight tags, non-SemVer names, a mismatched
 add-on version or a mismatched Dockerfile source reference. It tests the code,
