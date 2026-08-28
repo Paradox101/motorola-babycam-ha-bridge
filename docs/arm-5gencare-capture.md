@@ -1,6 +1,21 @@
 # ARM 5GenCare control-flow capture — runbook
 
-Statusdatum: 2026-08-27.
+Statusdatum: 2026-08-27. **Update 2026-08-28: de arm64-AVD-route werkt niet op
+deze x86_64-Windows-host.** De geïnstalleerde emulator (36.4.9/36.4.10) weigert
+een arm64-guest botweg:
+
+> `FATAL | Avd's CPU Architecture 'arm64' is not supported by the QEMU2 emulator on x86_64 host.`
+
+Google heeft ARM-op-x86-emulatie rond emulator v29 geschrapt; arm64-images
+draaien alleen op arm64-hosts (bijv. Apple Silicon). De hieronder beschreven
+`VM65-ARM64`-opzet blijft geldig als runbook voor een arm64-host, maar is op
+deze machine niet uitvoerbaar.
+
+**Werkende host-onafhankelijke route op deze machine:** reFlutter (0.8.6) +
+mitmproxy (12.2.3), beide al geïnstalleerd. reFlutter patcht `libflutter.so`
+statisch (certificaatvalidatie uit + verkeer naar een proxy), dus het werkt op
+de snelle x86_64-`VM65-Frida`-AVD ondanks de houdini-native-bridge. Zie
+`docs/reflutter-mitm-capture.md`.
 
 Doel: de **5GenCare-controlflow** (login v3, session v3, `CMD_DLIST`, token-/
 accessToken-uitgifte) als plaintext observeren — het enige resterende blok voor
