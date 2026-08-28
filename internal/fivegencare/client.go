@@ -8,7 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net"
 	"strconv"
 	"strings"
@@ -17,13 +17,21 @@ import (
 
 type DialFunc func(context.Context, string) (net.Conn, error)
 
+// DefaultExchangeTimeout bounds one request/response exchange when neither
+// Client.Timeout nor the caller's context supplies a deadline.
+const DefaultExchangeTimeout = 10 * time.Second
+
 type Client struct {
-	Host    string
-	Port    int
+	Host string
+	Port int
+	// Timeout bounds each exchange end to end: connecting, writing the command
+	// and reading the response line. Zero selects DefaultExchangeTimeout.
 	Timeout time.Duration
 	Dial    DialFunc
-	// Debug enables protocol diagnostics without logging credentials.
-	Debug bool
+	// Logger receives protocol diagnostics at debug level. Credentials are never
+	// logged; responses are summarised to their first two fields. Nil disables
+	// diagnostics.
+	Logger *slog.Logger
 }
 
 type OTPChallenge struct {
@@ -120,6 +128,12 @@ func (c Client) Devices(ctx context.Context, session Session) ([]Device, error) 
 		}
 		c.debugf("restore: candidate %d failed: %v", i+1, err)
 		lastErr = err
+		// Only an explicit rejection says anything about this token. A transport
+		// failure would fail identically for every candidate, so retrying it just
+		// doubles the wait on an unreachable host.
+		if !errors.Is(err, ErrSessionRejected) {
+			break
+		}
 	}
 	if lastErr == nil {
 		lastErr = errors.New("session has no token")
@@ -153,7 +167,7 @@ func (c Client) devicesWithToken(ctx context.Context, session Session) ([]Device
 			return nil, err
 		}
 		reader := bufio.NewReader(conn)
-		line, err := writeRead(conn, reader, sessionWire)
+		line, err := c.writeRead(ctx, conn, reader, sessionWire)
 		if err != nil {
 			conn.Close()
 			return nil, fmt.Errorf("restore session: %w", err)
@@ -176,7 +190,7 @@ func (c Client) devicesWithToken(ctx context.Context, session Session) ([]Device
 			return nil, err
 		}
 		secretWire, _ := SecretCommand(secret)
-		line, err = writeRead(conn, reader, secretWire)
+		line, err = c.writeRead(ctx, conn, reader, secretWire)
 		if err != nil {
 			conn.Close()
 			return nil, fmt.Errorf("negotiate secret: %w", err)
@@ -187,7 +201,7 @@ func (c Client) devicesWithToken(ctx context.Context, session Session) ([]Device
 			return nil, err
 		}
 
-		line, err = writeRead(conn, reader, []byte("v3_dlist\n"))
+		line, err = c.writeRead(ctx, conn, reader, []byte("v3_dlist\n"))
 		if err != nil {
 			conn.Close()
 			return nil, fmt.Errorf("request device list: %w", err)
@@ -204,9 +218,10 @@ func (c Client) devicesWithToken(ctx context.Context, session Session) ([]Device
 }
 
 func (c Client) debugf(format string, args ...any) {
-	if c.Debug {
-		log.Printf("fivegencare: "+format, args...)
+	if c.Logger == nil {
+		return
 	}
+	c.Logger.Debug(fmt.Sprintf(format, args...))
 }
 
 func responseSummary(line string) string {
@@ -238,17 +253,31 @@ func (c Client) exchange(ctx context.Context, host string, wire []byte) (string,
 		return "", err
 	}
 	defer conn.Close()
-	return writeRead(conn, bufio.NewReader(conn), wire)
+	return c.writeRead(ctx, conn, bufio.NewReader(conn), wire)
+}
+
+// exchangeDeadline bounds one write/read round trip. The caller's context wins
+// when it is stricter, so a shutdown is never delayed by the client timeout.
+func (c Client) exchangeDeadline(ctx context.Context) time.Time {
+	deadline := time.Now().Add(c.timeout())
+	if contextDeadline, ok := ctx.Deadline(); ok && contextDeadline.Before(deadline) {
+		return contextDeadline
+	}
+	return deadline
+}
+
+func (c Client) timeout() time.Duration {
+	if c.Timeout > 0 {
+		return c.Timeout
+	}
+	return DefaultExchangeTimeout
 }
 
 func (c Client) dial(ctx context.Context, host string) (net.Conn, error) {
 	if c.Dial != nil {
 		return c.Dial(ctx, host)
 	}
-	timeout := c.Timeout
-	if timeout == 0 {
-		timeout = 10 * time.Second
-	}
+	timeout := c.timeout()
 	port := c.Port
 	if port == 0 {
 		port = DefaultPort
@@ -271,7 +300,15 @@ func (c Client) host() string {
 	return DefaultHost
 }
 
-func writeRead(conn io.Writer, reader *bufio.Reader, wire []byte) (string, error) {
+// writeRead sends one command and reads one response line under a deadline. A
+// server that accepts the TLS connection and then goes silent must fail the
+// exchange, not block the caller: the dial timeout does not cover the read.
+func (c Client) writeRead(ctx context.Context, conn io.Writer, reader *bufio.Reader, wire []byte) (string, error) {
+	if deadliner, ok := conn.(interface{ SetDeadline(time.Time) error }); ok {
+		if err := deadliner.SetDeadline(c.exchangeDeadline(ctx)); err != nil {
+			return "", fmt.Errorf("set exchange deadline: %w", err)
+		}
+	}
 	if _, err := conn.Write(wire); err != nil {
 		return "", err
 	}

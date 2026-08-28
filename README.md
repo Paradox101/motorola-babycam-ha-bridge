@@ -17,9 +17,12 @@ stream alias and `vm65_bridge` add-on slug.
 - one isolated Magic WEB2 bridge per camera;
 - optional bundled go2rtc with RTSP, WebRTC, MSE and snapshots;
 - optional external-media-server mode;
-- retained, reconnect-safe Home Assistant MQTT Discovery;
-- liveness, readiness and sanitized status endpoints;
-- graceful shutdown and periodic credential refresh;
+- Home Assistant MQTT Discovery: per-camera snapshot and link entities, plus
+  bridge diagnostics, all retained and reconnect-safe;
+- Home Assistant Ingress for the Web UI, with snapshot images for each camera;
+- automatic restart of a failed camera bridge, with exponential backoff;
+- liveness, readiness and sanitized status endpoints with live session counters;
+- graceful shutdown, and credential refresh that does not interrupt live streams;
 - Linux amd64 and arm64 builds.
 
 Compatibility with other Motorola models depends on their using the same
@@ -28,16 +31,20 @@ validated on real hardware so far.
 
 ## Home Assistant quick start
 
-1. Add `https://github.com/Paradox101/motorola-vm65-bridge` as a custom add-on
+1. Add `https://github.com/Paradox101/motorola-babycam-ha-bridge` as a custom add-on
    repository.
 2. Install **Motorola Nursery Bridge**.
 3. Set `email`, start once, copy the emailed code into `otp_code`, then start
    again.
-4. Open the add-on Web UI. The first stream remains `vm65`; additional streams
-   use stable names derived from the camera names.
-5. Enable `mqtt_discovery` and configure the broker to create camera entities
-   automatically, or add `rtsp://<HA-host>:<configured-RTSP-port>/vm65`
-   manually.
+4. Open the add-on Web UI. It is served through Home Assistant Ingress, so it
+   works over any address you already use to reach Home Assistant. The first
+   stream remains `vm65`; additional streams use stable names derived from the
+   camera names.
+5. Enable `mqtt_discovery` for the camera and diagnostic entities; the broker
+   settings come from Home Assistant when Mosquitto is installed. Live video is
+   added once through the Generic Camera integration — Home Assistant has no
+   MQTT Discovery path for an RTSP stream — using the URLs the add-on logs on
+   start.
 
 See [the add-on manual](homeassistant/vm65-bridge/DOCS.md) for bundled and
 external mode, port mapping, troubleshooting and upgrades.
@@ -53,9 +60,11 @@ external mode, port mapping, troubleshooting and upgrades.
 | `internal/fivegencare` | Pairing, sessions, device discovery and secure state |
 | `internal/magic` | Magic WEB2 discovery, relay and tunnel protocol |
 | `internal/mqttdiscovery` | Reliable Home Assistant MQTT Discovery publisher |
+| `internal/buildinfo` | Build version reported by both commands and `/status` |
 | `homeassistant/vm65-bridge` | Locally built Home Assistant add-on |
 | `deploy/go2rtc` | Standalone deployment example |
 | `docs` | Architecture, operations, security and release documentation |
+| `CHANGELOG.md` | What changed in each release |
 | `research` | Historical captures, analysis notes and research-only tooling |
 
 The repository name, binary names and add-on slug retain `vm65` for upgrade
@@ -70,8 +79,9 @@ make check
 make dist
 ```
 
-CI additionally runs the race detector, Staticcheck, ShellCheck, Bats, add-on
-metadata policy checks, cross-compilation and non-publishing container builds.
+CI additionally runs the race detector, Staticcheck, govulncheck, a `go mod
+tidy` drift check, ShellCheck, Bats, add-on metadata policy checks,
+cross-compilation and non-publishing container builds.
 See [architecture](docs/architecture.md), [operations](docs/operations.md),
 [security](docs/security.md) and [releases](docs/releases.md).
 

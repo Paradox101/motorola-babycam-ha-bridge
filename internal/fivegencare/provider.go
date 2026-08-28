@@ -82,12 +82,16 @@ func (p *Provider) restore(ctx context.Context) ([]CameraCredentials, error) {
 
 	devices, err := p.cfg.Client.Devices(ctx, *state.Session)
 	if err != nil {
-		if errors.Is(err, ErrSessionRejected) {
-			state.Session = nil
-			state.Challenge = nil
-			if pairErr := p.pair(ctx, &state); pairErr != nil {
-				return nil, pairErr
-			}
+		if !errors.Is(err, ErrSessionRejected) {
+			return nil, fmt.Errorf("restore account session: %w", err)
+		}
+		// The stored session is gone and its challenge with it, so pairing
+		// always needs a fresh email code: pair reports what the user has to do
+		// and that instruction is the useful error here, not the rejection.
+		state.Session = nil
+		state.Challenge = nil
+		if pairErr := p.pair(ctx, &state); pairErr != nil {
+			return nil, pairErr
 		}
 		return nil, fmt.Errorf("restore account session: %w", err)
 	}

@@ -20,11 +20,13 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/local/motorola-vm65-bridge/internal/app"
 	"github.com/local/motorola-vm65-bridge/internal/bridge"
+	"github.com/local/motorola-vm65-bridge/internal/buildinfo"
 	appconfig "github.com/local/motorola-vm65-bridge/internal/config"
 	"github.com/local/motorola-vm65-bridge/internal/health"
 	"github.com/local/motorola-vm65-bridge/internal/mqttdiscovery"
@@ -45,6 +47,12 @@ type credsFile struct {
 }
 
 func main() {
+	for _, argument := range os.Args[1:] {
+		if argument == "-version" || argument == "--version" {
+			fmt.Println("vm65-bridge", buildinfo.String())
+			return
+		}
+	}
 	cfg, err := appconfig.Load(os.Args[1:], os.LookupEnv)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "invalid configuration:", err)
@@ -56,6 +64,7 @@ func main() {
 		level = slog.LevelDebug
 	}
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
+	logger.Info("Motorola Nursery bridge", "version", buildinfo.String())
 	logger.Debug("configuration loaded", "config", cfg.Redacted())
 
 	if err := run(cfg, logger); err != nil {
@@ -93,15 +102,18 @@ func run(cfg appconfig.Config, logger *slog.Logger) error {
 		startHealthServer(ctx, cfg.StatusAddr, health.NewHandler(healthState), logger)
 	}
 	var discovery *mqttdiscovery.Service
+	publisher := &discoveryPublisher{}
 	healthState.SetMQTT(cfg.MQTT.Host != "", false)
 	if cfg.MQTT.Host != "" && primary.DeviceUDID != "" && cfg.StreamURL != "" {
 		discovery = mqttdiscovery.NewService(mqttdiscovery.Config{
-			Host:            cfg.MQTT.Host,
-			Port:            cfg.MQTT.Port,
-			Username:        cfg.MQTT.Username,
-			Password:        cfg.MQTT.Password,
-			DiscoveryPrefix: cfg.MQTT.DiscoveryPrefix,
-			ClientID:        "vm65-bridge-" + primary.DeviceUDID,
+			Host:             cfg.MQTT.Host,
+			Port:             cfg.MQTT.Port,
+			Username:         cfg.MQTT.Username,
+			Password:         cfg.MQTT.Password,
+			DiscoveryPrefix:  cfg.MQTT.DiscoveryPrefix,
+			ClientID:         "vm65-bridge-" + primary.DeviceUDID,
+			Version:          buildinfo.String(),
+			ConfigurationURL: cfg.SnapshotBase,
 			OnConnectionChange: func(connected bool) {
 				healthState.SetMQTT(true, connected)
 			},
@@ -110,25 +122,11 @@ func run(cfg appconfig.Config, logger *slog.Logger) error {
 		if err != nil {
 			logger.Warn("MQTT discovery unavailable", "err", err)
 			healthState.SetLastError(health.ErrorBroker)
+			discovery = nil
 		} else {
-			for index, camera := range registry.Cameras {
-				name := camera.Credentials.DeviceName
-				if name == "" {
-					name = "Motorola Nursery Camera"
-				}
-				streamURL, urlErr := discoveryStreamURL(cfg.StreamURL, camera.StreamName, index == 0)
-				if urlErr != nil {
-					return urlErr
-				}
-				if publishErr := discovery.Upsert(ctx, mqttdiscovery.Camera{
-					ID:        camera.Credentials.DeviceUDID,
-					Name:      name,
-					Model:     camera.Credentials.Model,
-					StreamURL: streamURL,
-				}); publishErr != nil {
-					logger.Warn("MQTT camera discovery unavailable", "camera", camera.StreamName, "err", publishErr)
-					healthState.SetLastError(health.ErrorBroker)
-				}
+			publisher.service = discovery
+			if publishErr := publisher.publish(ctx, cfg, registry, logger, healthState); publishErr != nil {
+				return publishErr
 			}
 			defer func() {
 				shutdownContext, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
@@ -139,8 +137,172 @@ func run(cfg appconfig.Config, logger *slog.Logger) error {
 	}
 
 	logger.Info("starting Motorola Nursery bridge", "listen", cfg.ListenAddr, "cameras", len(registry.Cameras), "control_host", primary.ControlHost)
+	logCameraURLs(cfg, registry, logger)
 	runtime := app.New(app.RuntimeConfig{Registry: registry, Logger: logger, Health: healthState})
+
+	// SIGHUP swaps in freshly written credentials. Cameras whose credentials did
+	// not change keep streaming, so the periodic refresh no longer costs every
+	// viewer their picture.
+	go watchForReload(ctx, cfg, runtime, publisher, logger, healthState)
+
+	// Keep the diagnostic entities and per-camera availability in step with the
+	// runtime, so Home Assistant shows which camera is down instead of leaving
+	// every entity looking healthy.
+	if publisher.service != nil {
+		go mirrorStateToMQTT(ctx, publisher.service, runtime, healthState, 5*time.Second)
+	}
+
 	return runtime.Run(ctx)
+}
+
+// logCameraURLs prints the URLs a person needs to add the live video by hand.
+// Home Assistant cannot discover an RTSP stream over MQTT, so these are the
+// values that go into the camera integration.
+func logCameraURLs(cfg appconfig.Config, registry app.Registry, logger *slog.Logger) {
+	if cfg.StreamURL == "" {
+		return
+	}
+	for index, camera := range registry.Cameras {
+		streamName := camera.StreamName
+		if index == 0 {
+			streamName = registry.LegacyAlias
+		}
+		streamURL, err := discoveryStreamURL(cfg.StreamURL, camera.StreamName, index == 0)
+		if err != nil {
+			continue
+		}
+		logger.Info("camera stream ready",
+			"camera", camera.StreamName,
+			"stream_source", streamURL,
+			"still_image_url", snapshotURL(cfg.SnapshotBase, streamName))
+	}
+}
+
+// mirrorStateToMQTT publishes runtime counters and per-camera availability
+// until ctx is cancelled.
+func mirrorStateToMQTT(ctx context.Context, service *mqttdiscovery.Service, runtime *app.Runtime, healthState *health.State, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			snapshot := healthState.Snapshot()
+			_ = service.PublishStatus(ctx, mqttdiscovery.Status{
+				ActiveSessions: snapshot.ActiveSessions,
+				Reconnects:     snapshot.ReconnectsTotal,
+			})
+			for id, available := range runtime.CameraAvailability() {
+				_ = service.SetCameraAvailable(ctx, id, available)
+			}
+		}
+	}
+}
+
+// watchForReload applies a new credential file on SIGHUP until ctx is done.
+func watchForReload(ctx context.Context, cfg appconfig.Config, runtime *app.Runtime, publisher *discoveryPublisher, logger *slog.Logger, healthState *health.State) {
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, syscall.SIGHUP)
+	defer signal.Stop(signals)
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-signals:
+			logger.Info("reloading camera credentials")
+			credentials, err := loadCredentialSet(cfg)
+			if err != nil {
+				logger.Error("credential reload failed; keeping the running cameras", "err", err)
+				healthState.SetLastError(health.ErrorConfiguration)
+				continue
+			}
+			registry, err := app.BuildRegistry(cfg.ListenAddr, credentials)
+			if err != nil {
+				logger.Error("credential reload produced an invalid registry; keeping the running cameras", "err", err)
+				healthState.SetLastError(health.ErrorConfiguration)
+				continue
+			}
+			if err := runtime.Reload(registry); err != nil {
+				logger.Error("some cameras failed to restart after reload", "err", err)
+				healthState.SetLastError(health.ErrorNetwork)
+			}
+			if err := publisher.publish(ctx, cfg, registry, logger, healthState); err != nil {
+				logger.Error("MQTT discovery refresh failed", "err", err)
+				healthState.SetLastError(health.ErrorBroker)
+			}
+			logger.Info("credential reload complete", "cameras", len(registry.Cameras))
+		}
+	}
+}
+
+// discoveryPublisher keeps the retained MQTT discovery topics in step with the
+// running registry, including retiring cameras that disappeared from it.
+type discoveryPublisher struct {
+	service   *mqttdiscovery.Service
+	published []string
+}
+
+func (p *discoveryPublisher) publish(ctx context.Context, cfg appconfig.Config, registry app.Registry, logger *slog.Logger, healthState *health.State) error {
+	if p.service == nil {
+		return nil
+	}
+	current := make(map[string]struct{}, len(registry.Cameras))
+	for index, camera := range registry.Cameras {
+		name := camera.Credentials.DeviceName
+		if name == "" {
+			name = "Motorola Nursery Camera"
+		}
+		streamName := camera.StreamName
+		if index == 0 {
+			// The first camera keeps the historical vm65 alias in go2rtc.
+			streamName = registry.LegacyAlias
+		}
+		streamURL, err := discoveryStreamURL(cfg.StreamURL, camera.StreamName, index == 0)
+		if err != nil {
+			return err
+		}
+		if err := p.service.Upsert(ctx, mqttdiscovery.Camera{
+			ID:          camera.Credentials.DeviceUDID,
+			Name:        name,
+			Model:       camera.Credentials.Model,
+			StreamURL:   streamURL,
+			SnapshotURL: snapshotURL(cfg.SnapshotBase, streamName),
+		}); err != nil {
+			logger.Warn("MQTT camera discovery unavailable", "camera", camera.StreamName, "err", err)
+			healthState.SetLastError(health.ErrorBroker)
+		}
+		current[camera.Credentials.DeviceUDID] = struct{}{}
+	}
+	for _, id := range p.published {
+		if _, kept := current[id]; kept {
+			continue
+		}
+		if err := p.service.Remove(ctx, id); err != nil {
+			logger.Warn("could not retire the discovery entry of a removed camera", "camera_id", id, "err", err)
+		}
+	}
+	p.published = p.published[:0]
+	for id := range current {
+		p.published = append(p.published, id)
+	}
+	return nil
+}
+
+// snapshotURL points Home Assistant at go2rtc's still-frame endpoint so the
+// camera entity has a thumbnail. Empty base means no snapshot is advertised.
+func snapshotURL(base, streamName string) string {
+	if base == "" || streamName == "" {
+		return ""
+	}
+	parsed, err := url.Parse(base)
+	if err != nil {
+		return ""
+	}
+	parsed.Path = strings.TrimSuffix(parsed.Path, "/") + "/api/frame.jpeg"
+	parsed.RawQuery = url.Values{"src": []string{streamName}}.Encode()
+	return parsed.String()
 }
 
 func monitorGo2RTC(ctx context.Context, client *http.Client, endpoint string, interval time.Duration, state *health.State) {

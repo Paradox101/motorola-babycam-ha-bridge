@@ -1,3 +1,13 @@
+// Package mqttdiscovery publishes Home Assistant MQTT Discovery for the bridge.
+//
+// Home Assistant's MQTT integration validates every discovery payload against
+// the schema of the component it names, so the component has to match what is
+// actually being published. The MQTT camera platform requires a `topic` it can
+// read image bytes from and has no notion of an RTSP URL, which is why cameras
+// here are published as `image` entities fed by a snapshot URL, plus
+// `binary_sensor` and `sensor` entities for the state worth watching. A live
+// RTSP stream has no MQTT discovery path at all in Home Assistant; the add-on
+// documentation covers adding it once through the camera integration.
 package mqttdiscovery
 
 import (
@@ -16,6 +26,19 @@ import (
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 )
 
+// DefaultBaseTopic is the root of every state topic this service owns. State
+// lives outside the discovery prefix so it can never be mistaken for a
+// discovery message.
+const DefaultBaseTopic = "motorola-nursery-bridge"
+
+// bridgeObjectID identifies the bridge device itself across restarts.
+const bridgeObjectID = "motorola_nursery_bridge"
+
+const (
+	payloadOnline  = "online"
+	payloadOffline = "offline"
+)
+
 type Config struct {
 	Host               string
 	Port               int
@@ -24,13 +47,34 @@ type Config struct {
 	DiscoveryPrefix    string
 	ClientID           string
 	OnConnectionChange func(bool)
+
+	// BaseTopic roots the state topics. Zero selects DefaultBaseTopic.
+	BaseTopic string
+	// BridgeName is the device name shown in Home Assistant.
+	BridgeName string
+	// Version is reported as the device's software version.
+	Version string
+	// ConfigurationURL points at the add-on Web UI, when known.
+	ConfigurationURL string
 }
 
 type Camera struct {
-	ID        string
-	Name      string
-	Model     string
+	ID    string
+	Name  string
+	Model string
+	// StreamURL is the RTSP URL for the camera. Home Assistant cannot discover
+	// a stream over MQTT; it is reported as an attribute so the value is
+	// visible where the entity is.
 	StreamURL string
+	// SnapshotURL is fetched by Home Assistant for the image entity. Empty
+	// means no image entity is published for this camera.
+	SnapshotURL string
+}
+
+// Status is the runtime state mirrored into diagnostic entities.
+type Status struct {
+	ActiveSessions int64
+	Reconnects     uint64
 }
 
 type clientConfig struct {
@@ -48,12 +92,16 @@ type brokerClient interface {
 type clientFactory func(clientConfig) brokerClient
 
 type Service struct {
-	mu           sync.RWMutex
-	config       Config
-	client       brokerClient
-	connected    bool
-	cameras      map[string]Camera
+	mu        sync.RWMutex
+	config    Config
+	client    brokerClient
+	connected bool
+	cameras   map[string]Camera
+	available map[string]bool
+	status    Status
+
 	availability string
+	base         string
 }
 
 func NewService(config Config) *Service {
@@ -63,13 +111,22 @@ func NewService(config Config) *Service {
 }
 
 func newService(config Config, factory clientFactory) *Service {
-	prefix := strings.Trim(config.DiscoveryPrefix, "/")
-	config.DiscoveryPrefix = prefix
+	config.DiscoveryPrefix = strings.Trim(config.DiscoveryPrefix, "/")
+	if config.BaseTopic == "" {
+		config.BaseTopic = DefaultBaseTopic
+	}
+	config.BaseTopic = strings.Trim(config.BaseTopic, "/")
+	if config.BridgeName == "" {
+		config.BridgeName = "Motorola Nursery Bridge"
+	}
+	availability := config.BaseTopic + "/availability"
 	return &Service{
 		config:       config,
-		client:       factory(clientConfig{Config: config, WillTopic: prefix + "/device/motorola_nursery_bridge/availability", WillPayload: "offline"}),
+		client:       factory(clientConfig{Config: config, WillTopic: availability, WillPayload: payloadOffline}),
 		cameras:      make(map[string]Camera),
-		availability: prefix + "/device/motorola_nursery_bridge/availability",
+		available:    make(map[string]bool),
+		availability: availability,
+		base:         config.BaseTopic,
 	}
 }
 
@@ -87,16 +144,28 @@ func (s *Service) Start(ctx context.Context) error {
 	})
 }
 
+// Upsert registers a camera and publishes its discovery and state topics.
 func (s *Service) Upsert(ctx context.Context, camera Camera) error {
-	if camera.ID == "" || camera.Name == "" || camera.StreamURL == "" {
-		return errors.New("mqtt camera requires id, name and stream URL")
+	if camera.ID == "" || camera.Name == "" {
+		return errors.New("mqtt camera requires an id and a name")
 	}
-	parsed, err := url.Parse(camera.StreamURL)
-	if err != nil || parsed.Scheme != "rtsp" || parsed.Host == "" {
-		return errors.New("mqtt camera stream URL must be absolute RTSP")
+	if camera.StreamURL != "" {
+		parsed, err := url.Parse(camera.StreamURL)
+		if err != nil || parsed.Scheme != "rtsp" || parsed.Host == "" {
+			return errors.New("mqtt camera stream URL must be absolute RTSP")
+		}
+	}
+	if camera.SnapshotURL != "" {
+		parsed, err := url.Parse(camera.SnapshotURL)
+		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+			return errors.New("mqtt camera snapshot URL must be absolute http or https")
+		}
 	}
 	s.mu.Lock()
 	s.cameras[camera.ID] = camera
+	if _, known := s.available[camera.ID]; !known {
+		s.available[camera.ID] = true
+	}
 	connected := s.connected
 	s.mu.Unlock()
 	if !connected {
@@ -105,16 +174,51 @@ func (s *Service) Upsert(ctx context.Context, camera Camera) error {
 	return s.publishCamera(ctx, camera)
 }
 
-func (s *Service) Remove(ctx context.Context, id string) error {
+// SetCameraAvailable marks one camera's entities available or unavailable, so a
+// single failed bridge is visible instead of every entity looking healthy.
+func (s *Service) SetCameraAvailable(ctx context.Context, id string, available bool) error {
 	s.mu.Lock()
-	delete(s.cameras, id)
+	previous, known := s.available[id]
+	s.available[id] = available
+	connected := s.connected
+	s.mu.Unlock()
+	if !connected || (known && previous == available) {
+		return nil
+	}
+	return s.client.Publish(ctx, s.cameraTopic(id, "availability"), true, []byte(availabilityPayload(available)))
+}
+
+// PublishStatus mirrors the runtime counters into the diagnostic entities.
+func (s *Service) PublishStatus(ctx context.Context, status Status) error {
+	s.mu.Lock()
+	s.status = status
 	connected := s.connected
 	s.mu.Unlock()
 	if !connected {
 		return nil
 	}
-	topic := s.config.DiscoveryPrefix + "/camera/" + objectID(id) + "/config"
-	return s.client.Publish(ctx, topic, true, nil)
+	return s.publishStatus(ctx, status)
+}
+
+// Remove retires every entity of a camera that left the registry.
+func (s *Service) Remove(ctx context.Context, id string) error {
+	s.mu.Lock()
+	delete(s.cameras, id)
+	delete(s.available, id)
+	connected := s.connected
+	s.mu.Unlock()
+	if !connected {
+		return nil
+	}
+	object := objectID(id)
+	var errs []error
+	for _, topic := range []string{
+		s.discoveryTopic("image", object),
+		s.discoveryTopic("binary_sensor", object+"_link"),
+	} {
+		errs = append(errs, s.client.Publish(ctx, topic, true, nil))
+	}
+	return errors.Join(errs...)
 }
 
 func (s *Service) Close(ctx context.Context) error {
@@ -124,7 +228,7 @@ func (s *Service) Close(ctx context.Context) error {
 	s.mu.Unlock()
 	var err error
 	if connected {
-		err = s.client.Publish(ctx, s.availability, true, []byte("offline"))
+		err = s.client.Publish(ctx, s.availability, true, []byte(payloadOffline))
 	}
 	s.client.Close(1000)
 	return err
@@ -137,55 +241,237 @@ func (s *Service) onConnect() {
 	for _, camera := range s.cameras {
 		cameras = append(cameras, camera)
 	}
+	status := s.status
 	s.mu.Unlock()
 	if s.config.OnConnectionChange != nil {
 		s.config.OnConnectionChange(true)
 	}
 	sort.Slice(cameras, func(i, j int) bool { return cameras[i].ID < cameras[j].ID })
+
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	_ = s.client.Publish(ctx, s.availability, true, []byte("online"))
+	_ = s.client.Publish(ctx, s.availability, true, []byte(payloadOnline))
+	_ = s.publishBridgeEntities(ctx)
 	for _, camera := range cameras {
 		_ = s.publishCamera(ctx, camera)
 	}
+	_ = s.publishStatus(ctx, status)
+}
+
+// publishBridgeEntities registers the diagnostics that describe the bridge
+// itself: whether it is connected, how many stream sessions are live and how
+// often a camera bridge had to be restarted.
+func (s *Service) publishBridgeEntities(ctx context.Context) error {
+	device := s.bridgeDevice()
+	connection := entity{
+		Name:        "Connection",
+		UniqueID:    bridgeObjectID + "_connection",
+		StateTopic:  s.availability,
+		DeviceClass: "connectivity",
+		PayloadOn:   payloadOnline,
+		PayloadOff:  payloadOffline,
+		// Deliberately no availability block: an entity that is unavailable
+		// cannot also report that the bridge is disconnected.
+		EntityCategory: "diagnostic",
+		Device:         device,
+	}
+	sessions := entity{
+		Name:           "Active sessions",
+		UniqueID:       bridgeObjectID + "_active_sessions",
+		StateTopic:     s.base + "/status/active_sessions",
+		StateClass:     "measurement",
+		UnitOfMeasure:  "sessions",
+		Icon:           "mdi:video-account",
+		EntityCategory: "diagnostic",
+		Availability:   s.bridgeAvailability(),
+		Device:         device,
+	}
+	reconnects := entity{
+		Name:           "Bridge restarts",
+		UniqueID:       bridgeObjectID + "_reconnects",
+		StateTopic:     s.base + "/status/reconnects",
+		StateClass:     "total_increasing",
+		Icon:           "mdi:restart-alert",
+		EntityCategory: "diagnostic",
+		Availability:   s.bridgeAvailability(),
+		Device:         device,
+	}
+	return errors.Join(
+		s.publishEntity(ctx, "binary_sensor", bridgeObjectID+"_connection", connection),
+		s.publishEntity(ctx, "sensor", bridgeObjectID+"_active_sessions", sessions),
+		s.publishEntity(ctx, "sensor", bridgeObjectID+"_reconnects", reconnects),
+	)
 }
 
 func (s *Service) publishCamera(ctx context.Context, camera Camera) error {
-	model := camera.Model
-	if model == "" {
-		model = "Nursery Camera"
+	object := objectID(camera.ID)
+	device := s.cameraDevice(camera)
+
+	s.mu.RLock()
+	available := s.available[camera.ID]
+	s.mu.RUnlock()
+
+	var errs []error
+
+	// Every camera gets a link sensor, in bundled and external mode alike: it
+	// answers "is this camera reachable right now".
+	link := entity{
+		Name:        "Link",
+		UniqueID:    camera.ID + "_link",
+		StateTopic:  s.cameraTopic(camera.ID, "availability"),
+		DeviceClass: "connectivity",
+		PayloadOn:   payloadOnline,
+		PayloadOff:  payloadOffline,
+		Availability: []availability{{
+			Topic:              s.availability,
+			PayloadAvailable:   payloadOnline,
+			PayloadUnavailable: payloadOffline,
+		}},
+		EntityCategory: "diagnostic",
+		Device:         device,
 	}
-	payload := struct {
-		Name                string `json:"name"`
-		UniqueID            string `json:"unique_id"`
-		AvailabilityTopic   string `json:"availability_topic"`
-		PayloadAvailable    string `json:"payload_available"`
-		PayloadNotAvailable string `json:"payload_not_available"`
-		StreamSource        string `json:"stream_source"`
-		Device              struct {
-			Identifiers  []string `json:"identifiers"`
-			Name         string   `json:"name"`
-			Manufacturer string   `json:"manufacturer"`
-			Model        string   `json:"model"`
-		} `json:"device"`
-	}{
-		Name:                camera.Name,
-		UniqueID:            camera.ID,
-		AvailabilityTopic:   s.availability,
-		PayloadAvailable:    "online",
-		PayloadNotAvailable: "offline",
-		StreamSource:        camera.StreamURL,
+	errs = append(errs,
+		s.publishEntity(ctx, "binary_sensor", object+"_link", link),
+		s.client.Publish(ctx, s.cameraTopic(camera.ID, "availability"), true, []byte(availabilityPayload(available))),
+	)
+
+	if camera.SnapshotURL != "" {
+		image := entity{
+			Name:         "Snapshot",
+			UniqueID:     camera.ID + "_snapshot",
+			URLTopic:     s.cameraTopic(camera.ID, "snapshot_url"),
+			Availability: s.cameraAvailability(camera.ID),
+			// Both the bridge and this camera have to be up for the snapshot
+			// URL to answer.
+			AvailabilityMode: "all",
+			Device:           device,
+		}
+		errs = append(errs,
+			s.publishEntity(ctx, "image", object, image),
+			s.client.Publish(ctx, s.cameraTopic(camera.ID, "snapshot_url"), true, []byte(camera.SnapshotURL)),
+		)
+	} else {
+		// Retire an image entity left over from a previous bundled-mode run.
+		errs = append(errs, s.client.Publish(ctx, s.discoveryTopic("image", object), true, nil))
 	}
-	payload.Device.Identifiers = []string{camera.ID}
-	payload.Device.Name = camera.Name
-	payload.Device.Manufacturer = "Motorola"
-	payload.Device.Model = model
+
+	// Older versions published a `camera` discovery payload carrying
+	// stream_source. Home Assistant rejects it: the MQTT camera platform
+	// requires an image `topic` and has no stream_source key, so no entity was
+	// ever created. Clear the retained payload so brokers stop replaying it.
+	errs = append(errs, s.client.Publish(ctx, s.discoveryTopic("camera", object), true, nil))
+
+	return errors.Join(errs...)
+}
+
+func (s *Service) publishStatus(ctx context.Context, status Status) error {
+	return errors.Join(
+		s.client.Publish(ctx, s.base+"/status/active_sessions", true,
+			[]byte(strconv.FormatInt(status.ActiveSessions, 10))),
+		s.client.Publish(ctx, s.base+"/status/reconnects", true,
+			[]byte(strconv.FormatUint(status.Reconnects, 10))),
+	)
+}
+
+func (s *Service) publishEntity(ctx context.Context, component, object string, payload entity) error {
 	data, err := json.Marshal(payload)
 	if err != nil {
 		return err
 	}
-	topic := s.config.DiscoveryPrefix + "/camera/" + objectID(camera.ID) + "/config"
-	return s.client.Publish(ctx, topic, true, data)
+	return s.client.Publish(ctx, s.discoveryTopic(component, object), true, data)
+}
+
+func (s *Service) discoveryTopic(component, object string) string {
+	return s.config.DiscoveryPrefix + "/" + component + "/" + object + "/config"
+}
+
+func (s *Service) cameraTopic(id, leaf string) string {
+	return s.base + "/camera/" + objectID(id) + "/" + leaf
+}
+
+func (s *Service) bridgeAvailability() []availability {
+	return []availability{{
+		Topic:              s.availability,
+		PayloadAvailable:   payloadOnline,
+		PayloadUnavailable: payloadOffline,
+	}}
+}
+
+func (s *Service) cameraAvailability(id string) []availability {
+	return append(s.bridgeAvailability(), availability{
+		Topic:              s.cameraTopic(id, "availability"),
+		PayloadAvailable:   payloadOnline,
+		PayloadUnavailable: payloadOffline,
+	})
+}
+
+func (s *Service) bridgeDevice() device {
+	return device{
+		Identifiers:      []string{bridgeObjectID},
+		Name:             s.config.BridgeName,
+		Manufacturer:     "Motorola",
+		Model:            "Nursery Bridge",
+		SoftwareVersion:  s.config.Version,
+		ConfigurationURL: s.config.ConfigurationURL,
+	}
+}
+
+func (s *Service) cameraDevice(camera Camera) device {
+	model := camera.Model
+	if model == "" {
+		model = "Nursery Camera"
+	}
+	return device{
+		Identifiers:  []string{camera.ID},
+		Name:         camera.Name,
+		Manufacturer: "Motorola",
+		Model:        model,
+		ViaDevice:    bridgeObjectID,
+	}
+}
+
+func availabilityPayload(available bool) string {
+	if available {
+		return payloadOnline
+	}
+	return payloadOffline
+}
+
+// entity is the union of the discovery keys used here. Every key is one Home
+// Assistant accepts for the component it is published under; unknown keys are
+// silently dropped by the MQTT integration, which is how a wrong payload can
+// look like it works while creating no entity at all.
+type entity struct {
+	Name             string         `json:"name"`
+	UniqueID         string         `json:"unique_id"`
+	StateTopic       string         `json:"state_topic,omitempty"`
+	URLTopic         string         `json:"url_topic,omitempty"`
+	DeviceClass      string         `json:"device_class,omitempty"`
+	StateClass       string         `json:"state_class,omitempty"`
+	UnitOfMeasure    string         `json:"unit_of_measurement,omitempty"`
+	PayloadOn        string         `json:"payload_on,omitempty"`
+	PayloadOff       string         `json:"payload_off,omitempty"`
+	Icon             string         `json:"icon,omitempty"`
+	EntityCategory   string         `json:"entity_category,omitempty"`
+	Availability     []availability `json:"availability,omitempty"`
+	AvailabilityMode string         `json:"availability_mode,omitempty"`
+	Device           device         `json:"device"`
+}
+
+type availability struct {
+	Topic              string `json:"topic"`
+	PayloadAvailable   string `json:"payload_available"`
+	PayloadUnavailable string `json:"payload_not_available"`
+}
+
+type device struct {
+	Identifiers      []string `json:"identifiers"`
+	Name             string   `json:"name"`
+	Manufacturer     string   `json:"manufacturer"`
+	Model            string   `json:"model"`
+	SoftwareVersion  string   `json:"sw_version,omitempty"`
+	ConfigurationURL string   `json:"configuration_url,omitempty"`
+	ViaDevice        string   `json:"via_device,omitempty"`
 }
 
 func objectID(id string) string {

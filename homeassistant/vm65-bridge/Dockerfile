@@ -10,9 +10,9 @@ ARG GO_VERSION=1.27.0
 FROM golang:${GO_VERSION}-alpine AS build
 RUN apk add --no-cache git
 # Override to build a branch/tag/commit other than the default.
-ARG SOURCE_REF=v0.3.0
+ARG SOURCE_REF=v0.4.0
 RUN git clone --depth 1 --branch ${SOURCE_REF} \
-    https://github.com/Paradox101/motorola-vm65-bridge /src
+    https://github.com/Paradox101/motorola-babycam-ha-bridge /src
 WORKDIR /src
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" \
     -o /out/vm65-bridge ./cmd/vm65-bridge && \

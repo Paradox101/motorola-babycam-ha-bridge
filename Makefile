@@ -12,13 +12,14 @@ PKG       := ./cmd/vm65-bridge
 DISTDIR   := dist
 IMAGE     ?= vm65-bridge
 PLATFORMS ?= linux/amd64,linux/arm64
-LDFLAGS   := -s -w
+VERSION   ?= $(shell git describe --tags --always --dirty 2>/dev/null)
+LDFLAGS   := -s -w -X github.com/local/motorola-vm65-bridge/internal/buildinfo.Version=$(VERSION)
 
 .PHONY: all
 all: check build
 
 .PHONY: check
-check: fmt-check vet test policy addon-check
+check: fmt-check vet test policy addon-check shell-check
 
 .PHONY: test
 test:
@@ -34,8 +35,12 @@ fmt:
 
 .PHONY: fmt-check
 fmt-check:
-	@test -z "$$($(GO) env GOROOT)/bin/gofmt -l cmd internal" || \
-		(echo "Go files need gofmt" && $$($(GO) env GOROOT)/bin/gofmt -l cmd internal && exit 1)
+	@unformatted="$$($$($(GO) env GOROOT)/bin/gofmt -l cmd internal)"; \
+	if [ -n "$$unformatted" ]; then \
+		echo "These files need gofmt:"; \
+		echo "$$unformatted"; \
+		exit 1; \
+	fi
 
 .PHONY: policy
 policy:
@@ -45,6 +50,11 @@ policy:
 addon-check:
 	python tools/ci/check_addon.py
 	python -m unittest discover -s tools/ci -p 'test_*.py' -v
+
+.PHONY: shell-check
+shell-check:
+	shellcheck homeassistant/vm65-bridge/run.sh
+	bats homeassistant/vm65-bridge/tests/run.bats
 
 .PHONY: build
 build:

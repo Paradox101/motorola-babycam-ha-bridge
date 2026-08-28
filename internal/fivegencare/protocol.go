@@ -115,7 +115,17 @@ func ParseDeviceList(line string) ([]Device, error) {
 		if err != nil {
 			return nil, fmt.Errorf("device %d name: %w", i, err)
 		}
-		devices = append(devices, Device{uint32(id), p[1], p[2], name, p[4], p[5], p[6]})
+		// Named fields on purpose: a positional literal would silently swap SID
+		// and DeviceToken if the struct were ever reordered.
+		devices = append(devices, Device{
+			ID:          uint32(id),
+			UDID:        p[1],
+			Model:       p[2],
+			Name:        name,
+			DeviceToken: p[4],
+			SID:         p[5],
+			Country:     p[6],
+		})
 	}
 	return devices, nil
 }
