@@ -28,6 +28,33 @@ func TestLivenessAndReadinessTransitions(t *testing.T) {
 	assertStatus(t, handler, "/readyz", http.StatusOK)
 }
 
+func TestLivenessFailsWhenNoBridgeIsServing(t *testing.T) {
+	state := NewState(time.Unix(100, 0))
+	handler := NewHandler(state)
+	state.SetLive(true)
+	state.SetCredentialsReady(true)
+
+	// Every configured camera bridge is down: this is what the Home Assistant
+	// watchdog has to be able to see.
+	state.SetBridges(0, 2)
+	assertStatus(t, handler, "/healthz", http.StatusServiceUnavailable)
+
+	// A partial outage stays healthy — the runtime restarts that bridge itself,
+	// and restarting the add-on would drop the camera that still works.
+	state.SetBridges(1, 2)
+	assertStatus(t, handler, "/healthz", http.StatusOK)
+}
+
+func TestStatusReportsSessionCounters(t *testing.T) {
+	state := NewState(time.Unix(100, 0))
+	state.SetLive(true)
+	state.SetCounters(3, 2)
+	snapshot := state.Snapshot()
+	if snapshot.ReconnectsTotal != 3 || snapshot.ActiveSessions != 2 {
+		t.Fatalf("counters = %d reconnects / %d active", snapshot.ReconnectsTotal, snapshot.ActiveSessions)
+	}
+}
+
 func TestStatusContainsOnlyCategorizedErrors(t *testing.T) {
 	state := NewState(time.Unix(100, 0))
 	state.SetLive(true)
