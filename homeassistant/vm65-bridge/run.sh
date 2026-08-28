@@ -8,6 +8,9 @@ set -euo pipefail
 CREDS=/data/creds.json
 REGISTRY=/data/cameras.json
 GO2RTC_CFG=/data/go2rtc.yaml
+SNAPSHOT_TOKEN=/data/snapshot-token
+# Must match ingress_port in config.yaml.
+INGRESS_PORT=8099
 BRIDGE_PID=""
 GO2RTC_PID=""
 REFRESH_PID=""
@@ -36,6 +39,17 @@ if [[ "${MQTT_DISCOVERY}" == "true" ]] && bashio::services.available "mqtt"; the
   [[ -z "${MQTT_USERNAME}" ]] && MQTT_USERNAME=$(bashio::services mqtt "username")
   [[ -z "${MQTT_PASSWORD}" ]] && MQTT_PASSWORD=$(bashio::services mqtt "password")
   bashio::log.info "Using the MQTT broker provided by Home Assistant (${MQTT_HOST}:${MQTT_PORT})"
+fi
+
+# Home Assistant fetches camera snapshots by the add-on's hostname on the
+# Supervisor network. That name is assigned by the Supervisor, always resolves
+# from Home Assistant, and needs no published port — unlike stream_host, which
+# only works if the name resolves on the LAN. Fall back to stream_host when the
+# Supervisor cannot be asked, so a bare container still starts.
+ADDON_HOSTNAME=$(bashio::addon.hostname 2>/dev/null || true)
+if [[ -z "${ADDON_HOSTNAME}" || "${ADDON_HOSTNAME}" == "null" ]]; then
+  ADDON_HOSTNAME="${STREAM_HOST}"
+  bashio::log.warning "Could not read this add-on's hostname; snapshots will use ${STREAM_HOST}"
 fi
 
 if [[ -z "${CONTROL_HOST}" ]]; then
@@ -121,12 +135,18 @@ STREAM_PORT=8555
 if [[ "${STREAM_BACKEND}" == "external" ]]; then STREAM_PORT=${EXTERNAL_STREAM_PORT}; fi
 BRIDGE_ARGS=(-listen "${BRIDGE_LISTEN}" -status 0.0.0.0:8557 -creds "${CREDS}" -registry "${REGISTRY}" -stream-url "rtsp://${STREAM_HOST}:${STREAM_PORT}/vm65" -shutdown-timeout "${SHUTDOWN_TIMEOUT}s")
 BRIDGE_ARGS+=( -go2rtc-required -go2rtc-url "http://127.0.0.1:1984/" )
+# The Web UI is proxied to go2rtc only after the Supervisor's ingress user
+# header has been checked, so this listener is the one Ingress talks to.
+BRIDGE_ARGS+=( -ingress "0.0.0.0:${INGRESS_PORT}" )
 if [[ "${MQTT_DISCOVERY}" == "true" ]]; then
   BRIDGE_ARGS+=( -mqtt-host "${MQTT_HOST}" -mqtt-port "${MQTT_PORT}" -mqtt-username "${MQTT_USERNAME}" -mqtt-discovery-prefix "${MQTT_PREFIX}" -temperature-poll-interval "${TEMPERATURE_POLL_INTERVAL}s" )
-  # Snapshots are served by the bundled go2rtc; in external mode the media
-  # server owns them, so no snapshot URL is advertised.
+  # Snapshots come from the bundled go2rtc, served and cached by the bridge on
+  # the Supervisor network. Home Assistant reaches it by the add-on's internal
+  # hostname, so no host port is involved and no name has to resolve on the
+  # LAN. In external mode the media server owns snapshots, so none is
+  # advertised.
   if [[ "${STREAM_BACKEND}" != "external" ]]; then
-    BRIDGE_ARGS+=( -snapshot-url-base "http://${STREAM_HOST}:1984" )
+    BRIDGE_ARGS+=( -snapshot-url-base "http://${ADDON_HOSTNAME}:${INGRESS_PORT}" -snapshot-token-file "${SNAPSHOT_TOKEN}" )
   fi
 fi
 vm65-bridge "${BRIDGE_ARGS[@]}" &

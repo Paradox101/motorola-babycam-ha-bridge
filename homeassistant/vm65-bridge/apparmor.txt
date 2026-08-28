@@ -1,0 +1,50 @@
+# AppArmor profile for the Motorola Nursery Bridge add-on.
+#
+# Home Assistant's add-on security guidance asks every add-on to ship one. The
+# Supervisor loads this file automatically and renames the profile to the
+# add-on slug, so the name below must stay in step with `slug:` in config.yaml.
+#
+# It follows the shape of the profile Home Assistant documents: the add-on
+# needs no capabilities beyond running its own processes, so the profile grants
+# file and network access and denies everything else — mounts, raw capabilities
+# and ptrace included. Keep it permissive enough to start: a profile that
+# blocks the entrypoint takes the cameras offline, which is a worse failure
+# than the one it prevents.
+#include <tunables/global>
+
+profile vm65_bridge flags=(attach_disconnected,mediate_deleted) {
+  #include <abstractions/base>
+
+  file,
+  network,
+  signal (send) set=(kill,term,int,hup,cont),
+
+  # S6-Overlay
+  /init ix,
+  /bin/** ix,
+  /usr/bin/** ix,
+  /run/{s6,s6-rc*,service}/** ix,
+  /package/** ix,
+  /command/** ix,
+  /etc/s6-overlay/** ix,
+  /etc/services.d/** rwix,
+  /etc/cont-init.d/** rwix,
+  /etc/cont-finish.d/** rwix,
+  /run/{,**} rwk,
+  /dev/tty rw,
+
+  # Bashio
+  /usr/lib/bashio/** ix,
+  /tmp/** rwk,
+
+  # The add-on's own processes: the bridge, the pairing tool and go2rtc, which
+  # runs ffmpeg to turn a keyframe into a snapshot JPEG.
+  /run.sh r,
+  /usr/local/bin/vm65-bridge ix,
+  /usr/local/bin/vm65-setup ix,
+  /usr/local/bin/go2rtc ix,
+
+  # Pairing state, camera credentials, the generated go2rtc configuration and
+  # the snapshot token.
+  /data/** rw,
+}

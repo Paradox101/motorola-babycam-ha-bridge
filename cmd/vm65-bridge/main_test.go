@@ -2,6 +2,9 @@ package main
 
 import (
 	"context"
+	"io"
+	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -84,24 +87,122 @@ func waitForGo2RTC(t *testing.T, state *health.State, want bool) {
 	t.Fatalf("go2rtc ready = %t, want %t", state.Snapshot().Go2RTCReady, want)
 }
 
-func TestSnapshotURLTargetsTheGo2RTCStillFrameEndpoint(t *testing.T) {
+func TestStreamNamesCoverEveryCameraAndTheLegacyAlias(t *testing.T) {
+	registry, err := app.BuildRegistry("127.0.0.1:8554", []bridge.Credentials{
+		{DeviceUDID: "a", DeviceName: "Room A", SID: "s", DeviceToken: "t", ControlHost: "relay"},
+		{DeviceUDID: "b", DeviceName: "Room B", SID: "s", DeviceToken: "t", ControlHost: "relay"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := streamNames(registry)
+	want := map[string]bool{"vm65": true, "room-a": true, "room-b": true}
+	if len(names) != len(want) {
+		t.Fatalf("names = %v", names)
+	}
+	for _, name := range names {
+		if !want[name] {
+			t.Fatalf("unexpected stream name %q in %v", name, names)
+		}
+	}
+}
+
+// The Web UI and the snapshot endpoint share the Ingress listener: the Web UI
+// needs an authenticated Home Assistant user, the snapshot needs the token,
+// and neither answers a peer outside the Supervisor network.
+func TestWebServerServesAnAuthenticatedUIAndTokenisedSnapshots(t *testing.T) {
+	go2rtc := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/api/frame.jpeg" {
+			writer.Header().Set("Content-Type", "image/jpeg")
+			_, _ = writer.Write([]byte{0xFF, 0xD8, 0x00})
+			return
+		}
+		_, _ = writer.Write([]byte("go2rtc web ui"))
+	}))
+	defer go2rtc.Close()
+
+	registry, err := app.BuildRegistry("127.0.0.1:8554", []bridge.Credentials{
+		{DeviceUDID: "a", DeviceName: "Room A", SID: "s", DeviceToken: "t", ControlHost: "relay"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tokenPath := filepath.Join(t.TempDir(), "snapshot-token")
+	cfg := appconfig.Config{
+		IngressAddr:       "127.0.0.1:0",
+		SnapshotBase:      "http://local-vm65-bridge:8099",
+		SnapshotTokenFile: tokenPath,
+		Go2RTCURL:         go2rtc.URL,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	address := listener.Addr().String()
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	cfg.IngressAddr = address
+
+	snapshots, err := startWebServer(ctx, cfg, registry, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatalf("startWebServer: %v", err)
+	}
+	defer snapshots.Close()
+	if snapshots.Token() == "" {
+		t.Fatal("a published snapshot URL needs a token")
+	}
+
+	base := "http://" + address
+	waitForServer(t, base)
+
 	cases := []struct {
-		name   string
-		base   string
-		stream string
-		want   string
+		name    string
+		target  string
+		headers map[string]string
+		want    int
 	}{
-		{"plain base", "http://homeassistant.local:1984", "vm65", "http://homeassistant.local:1984/api/frame.jpeg?src=vm65"},
-		{"trailing slash", "http://homeassistant.local:1984/", "vm65", "http://homeassistant.local:1984/api/frame.jpeg?src=vm65"},
-		{"name needing escaping", "http://10.0.0.5:1984", "baby room", "http://10.0.0.5:1984/api/frame.jpeg?src=baby+room"},
-		{"no base configured", "", "vm65", ""},
-		{"no stream name", "http://10.0.0.5:1984", "", ""},
+		{"web UI without a Home Assistant session", base + "/", nil, http.StatusUnauthorized},
+		{"web UI through ingress", base + "/", map[string]string{"X-Remote-User-Id": "01HQ"}, http.StatusOK},
+		{"go2rtc configuration", base + "/api/config", map[string]string{"X-Remote-User-Id": "01HQ"}, http.StatusForbidden},
+		{"snapshot without a token", base + "/snapshot?src=vm65", nil, http.StatusUnauthorized},
+		{"snapshot with the token", base + "/snapshot?src=vm65&token=" + snapshots.Token(), nil, http.StatusOK},
+		{"snapshot of an unknown camera", base + "/snapshot?src=exec:id&token=" + snapshots.Token(), nil, http.StatusNotFound},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
-			if got := snapshotURL(testCase.base, testCase.stream); got != testCase.want {
-				t.Fatalf("snapshotURL(%q, %q) = %q, want %q", testCase.base, testCase.stream, got, testCase.want)
+			request, err := http.NewRequest(http.MethodGet, testCase.target, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for key, value := range testCase.headers {
+				request.Header.Set(key, value)
+			}
+			response, err := http.DefaultClient.Do(request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer response.Body.Close()
+			if response.StatusCode != testCase.want {
+				t.Fatalf("status = %d, want %d", response.StatusCode, testCase.want)
 			}
 		})
 	}
+}
+
+func waitForServer(t *testing.T, base string) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		response, err := http.Get(base + "/")
+		if err == nil {
+			_ = response.Body.Close()
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("the web server never started listening")
 }
