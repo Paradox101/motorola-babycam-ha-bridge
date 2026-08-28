@@ -26,8 +26,6 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"strings"
-
-	"github.com/local/motorola-vm65-bridge/internal/netguard"
 )
 
 // UserIDHeader is the header the Supervisor sets on every ingress request. Its
@@ -79,7 +77,7 @@ func NewHandler(cfg Config) (http.Handler, error) {
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
 	}
-	guard, err := netguard.New(cfg.TrustedCIDRs)
+	authenticator, err := NewAuthenticator(cfg.TrustedCIDRs, cfg.Logger)
 	if err != nil {
 		return nil, err
 	}
@@ -116,33 +114,30 @@ func NewHandler(cfg Config) (http.Handler, error) {
 	}
 
 	handler := &authProxy{
-		proxy:       proxy,
-		guard:       guard,
-		streams:     streams,
-		requireUser: requireUser,
-		logger:      cfg.Logger,
+		proxy:         proxy,
+		authenticator: authenticator,
+		streams:       streams,
+		requireUser:   requireUser,
+		logger:        cfg.Logger,
 	}
 	return handler, nil
 }
 
 type authProxy struct {
-	proxy       http.Handler
-	guard       *netguard.Guard
-	streams     map[string]bool
-	requireUser bool
-	logger      *slog.Logger
+	proxy         http.Handler
+	authenticator *Authenticator
+	streams       map[string]bool
+	requireUser   bool
+	logger        *slog.Logger
 }
 
 func (a *authProxy) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
-	if !a.guard.Allow(request.RemoteAddr) {
-		a.logger.Warn("rejected a Web UI request from an untrusted address", "remote", request.RemoteAddr)
+	if a.requireUser {
+		if !a.authenticator.Allow(writer, request) {
+			return
+		}
+	} else if !a.authenticator.guard.Allow(request.RemoteAddr) {
 		http.Error(writer, "forbidden", http.StatusForbidden)
-		return
-	}
-	if a.requireUser && request.Header.Get(UserIDHeader) == "" {
-		// Reaching the add-on without this header means the request did not
-		// come through Ingress, so no Home Assistant session was checked.
-		http.Error(writer, "unauthorized: open this add-on from the Home Assistant sidebar", http.StatusUnauthorized)
 		return
 	}
 	if reason, ok := a.refuse(request); !ok {
@@ -150,7 +145,7 @@ func (a *authProxy) ServeHTTP(writer http.ResponseWriter, request *http.Request)
 		http.Error(writer, "forbidden: "+reason, http.StatusForbidden)
 		return
 	}
-	setSecurityHeaders(writer.Header())
+	SetSecurityHeaders(writer.Header())
 	a.proxy.ServeHTTP(writer, request)
 }
 
@@ -205,11 +200,4 @@ func normalizePath(path string) string {
 		return "/"
 	}
 	return cleaned
-}
-
-func setSecurityHeaders(header http.Header) {
-	header.Set("X-Content-Type-Options", "nosniff")
-	header.Set("Referrer-Policy", "no-referrer")
-	// The Web UI only ever runs inside the Home Assistant frame.
-	header.Set("X-Frame-Options", "SAMEORIGIN")
 }

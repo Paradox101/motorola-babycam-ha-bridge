@@ -125,6 +125,38 @@ EOF
   ! grep -q 'svc-pass' "$CALL_LOG"
 }
 
+@test "first start serves the pairing page instead of failing" {
+  export TEST_BACKEND=bundled
+  run bash homeassistant/vm65-bridge/run.sh
+  [ "$status" -eq 7 ]
+  # The startup run can wait on the pairing page; the periodic refresh must not.
+  grep -q -- '-pair-ui 0.0.0.0:8099' "$CALL_LOG"
+  # The watchdog has to find something listening while pairing is pending.
+  grep -q -- '-status 0.0.0.0:8557' "$CALL_LOG"
+  # No code goes out until someone asks for one in the Web UI.
+  grep -q -- '-request-code=false' "$CALL_LOG"
+}
+
+@test "the periodic refresh never waits on the pairing page" {
+  export TEST_BACKEND=bundled
+  export TEST_REFRESH_INTERVAL=1
+  cat > "${BATS_TEST_TMPDIR}/bin/vm65-bridge" <<'EOF'
+#!/bin/sh
+printf "bridge %s\n" "$*" >> "$CALL_LOG"
+sleep 30 &
+SLEEP_PID=$!
+trap 'kill "$SLEEP_PID" 2>/dev/null; exit 9' HUP
+wait "$SLEEP_PID"
+EOF
+  chmod +x "${BATS_TEST_TMPDIR}/bin/vm65-bridge"
+
+  run timeout 20 bash homeassistant/vm65-bridge/run.sh
+  [ "$status" -eq 9 ]
+  # Exactly one of the two setup runs may serve the page: the first.
+  [ "$(grep -c -- '-pair-ui' "$CALL_LOG")" -eq 1 ]
+  [ "$(grep -c '^setup ' "$CALL_LOG")" -ge 2 ]
+}
+
 @test "the Web UI listens on the ingress port rather than go2rtc" {
   export TEST_BACKEND=bundled
   run bash homeassistant/vm65-bridge/run.sh

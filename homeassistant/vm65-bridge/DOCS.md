@@ -6,13 +6,20 @@ models work when they expose the same required 5GenCare/Magic fields.
 
 ## First start
 
-1. Set `email` to the Motorola Nursery account address.
-2. Start the add-on. It sends an email code and stops with `PAIRING_REQUIRED`.
-3. Set `otp_code` to that code and start again.
-4. After a successful start, clear `otp_code`.
+1. Start the add-on. It comes up unpaired and waits.
+2. Click **Open Web UI**. The pairing page asks for your Motorola Nursery
+   account address and sends a code to it.
+3. Enter the code from the email. The cameras start straight away.
+
+There is nothing to fill in beforehand and no second restart. The `email` and
+`otp_code` options still work for an unattended setup, but the Web UI needs
+neither, and a code entered there is never written to the configuration.
+
+Codes expire. If one is refused as expired, use **Send a new code** on the same
+page — the old code is discarded rather than retried.
 
 The account session is stored privately and refreshed periodically. A rejected
-session triggers a new pairing request.
+session brings the pairing page back on the next start.
 
 ## Streaming modes
 
@@ -87,8 +94,8 @@ IP address of the Home Assistant host.
 
 | Option | Meaning |
 | --- | --- |
-| `email` | Motorola Nursery account email |
-| `otp_code` | Temporary email pairing code; clear after pairing |
+| `email` | Motorola Nursery account email; optional, the Web UI asks for it |
+| `otp_code` | Legacy unattended pairing code; leave empty and use the Web UI |
 | `control_host` | Magic relay control host |
 | `stream_backend` | `bundled` or `external` |
 | `mqtt_discovery` | Publish Home Assistant camera discovery |
@@ -107,7 +114,7 @@ All version 0.2.0 option names remain valid.
 
 | Container port | Published | Service |
 | --- | --- | --- |
-| `8099/tcp` | no | Web UI and camera snapshots, reached through Ingress |
+| `8099/tcp` | no | Web UI, pairing page and camera snapshots, through Ingress |
 | `8555/tcp` | yes | bundled go2rtc RTSP |
 | `8556/tcp,udp` | yes | bundled go2rtc WebRTC |
 | `8557/tcp` | no | `/healthz`, `/readyz`, `/status` |
@@ -139,6 +146,18 @@ Every `credential_refresh_interval` seconds the add-on fetches fresh camera
 credentials and signals the bridge to adopt them. Cameras whose credentials did
 not change keep streaming, so a routine refresh no longer interrupts a live
 picture. go2rtc is not restarted.
+
+## Pairing
+
+Until the account is paired, the Ingress page is the pairing form rather than
+the stream view, and the add-on serves its health endpoint so the Supervisor
+watchdog leaves it alone while you read your email. Once pairing succeeds the
+add-on continues its normal startup by itself; reload the page and it becomes
+the go2rtc Web UI.
+
+The page is reachable only through Ingress: it requires the Home Assistant user
+identity the Supervisor attaches to the request, and refuses connections from
+outside the Supervisor network. Only administrators see the add-on panel.
 
 ## Snapshots
 
