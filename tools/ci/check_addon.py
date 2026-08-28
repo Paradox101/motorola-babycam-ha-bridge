@@ -94,6 +94,11 @@ def validate_addon(root: Path) -> list[str]:
             if image.lower().endswith(":latest"):
                 errors.append(f"Dockerfile uses mutable image tag: {image}")
 
+        clone = re.search(r"(?m)^RUN git clone\b", dockerfile)
+        config_copy = re.search(r"(?m)^COPY\s+config\.yaml\s+\S+", dockerfile)
+        if clone is not None and (config_copy is None or config_copy.start() > clone.start()):
+            errors.append("Dockerfile must copy config.yaml before cloning remote source")
+
     return errors
 
 
