@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -22,6 +23,12 @@ type MQTT struct {
 }
 
 // Config is the validated long-running bridge configuration.
+//
+// SnapshotBase is the base URL under which Home Assistant reaches this
+// process, not go2rtc: the bridge serves the still images itself so a cold
+// camera cannot blow the ten-second budget Home Assistant allows an image
+// entity. IngressAddr is where that endpoint, and the authenticated Web UI,
+// listen.
 type Config struct {
 	ListenAddr              string
 	CredentialsPath         string
@@ -31,6 +38,9 @@ type Config struct {
 	MQTT                    MQTT
 	StreamURL               string
 	SnapshotBase            string
+	SnapshotTokenFile       string
+	IngressAddr             string
+	IngressTrustedCIDRs     []string
 	Go2RTCRequired          bool
 	Go2RTCURL               string
 	ShutdownTimeout         time.Duration
@@ -57,7 +67,11 @@ func Load(args []string, lookupEnv func(string) (string, bool)) (Config, error) 
 	flags.StringVar(&legacyMQTTPassword, "mqtt-password", "", "deprecated: use VM65_MQTT_PASSWORD")
 	flags.StringVar(&cfg.MQTT.DiscoveryPrefix, "mqtt-discovery-prefix", "homeassistant", "MQTT discovery prefix")
 	flags.StringVar(&cfg.StreamURL, "stream-url", "", "RTSP URL for MQTT discovery")
-	flags.StringVar(&cfg.SnapshotBase, "snapshot-url-base", "", "optional go2rtc base URL for MQTT snapshot images, e.g. http://homeassistant.local:1984")
+	flags.StringVar(&cfg.SnapshotBase, "snapshot-url-base", "", "public base URL of this bridge, used to build the MQTT snapshot image URL, e.g. http://local-vm65-bridge:8099")
+	flags.StringVar(&cfg.SnapshotTokenFile, "snapshot-token-file", "", "file holding the snapshot URL token; created when missing")
+	flags.StringVar(&cfg.IngressAddr, "ingress", "", "optional listen address for the authenticated Web UI and snapshot endpoints")
+	var trustedCIDRs string
+	flags.StringVar(&trustedCIDRs, "ingress-trusted-cidr", "", "comma-separated networks allowed to reach the Web UI and snapshots (default: the Supervisor network; \"any\" disables the check)")
 	flags.BoolVar(&cfg.Go2RTCRequired, "go2rtc-required", false, "require a reachable go2rtc endpoint for readiness")
 	flags.StringVar(&cfg.Go2RTCURL, "go2rtc-url", "http://127.0.0.1:1984/", "go2rtc readiness endpoint")
 	flags.DurationVar(&cfg.ShutdownTimeout, "shutdown-timeout", 10*time.Second, "graceful shutdown timeout")
@@ -66,6 +80,7 @@ func Load(args []string, lookupEnv func(string) (string, bool)) (Config, error) 
 		return Config{}, fmt.Errorf("parse configuration: %w", err)
 	}
 
+	cfg.IngressTrustedCIDRs = parseTrustedCIDRs(trustedCIDRs)
 	cfg.MQTT.Password = legacyMQTTPassword
 	if lookupEnv != nil {
 		if password, ok := lookupEnv("VM65_MQTT_PASSWORD"); ok {
@@ -88,6 +103,11 @@ func (c Config) Validate() error {
 	}
 	if c.StatusAddr != "" {
 		if err := validateAddress("status address", c.StatusAddr); err != nil {
+			return err
+		}
+	}
+	if c.IngressAddr != "" {
+		if err := validateAddress("ingress address", c.IngressAddr); err != nil {
 			return err
 		}
 	}
@@ -121,8 +141,34 @@ func (c Config) Validate() error {
 		if err != nil || (snapshot.Scheme != "http" && snapshot.Scheme != "https") || snapshot.Host == "" {
 			return errors.New("snapshot URL base must be an absolute http or https URL")
 		}
+		// The bridge serves the snapshots, so advertising a URL without
+		// starting that listener would publish an address nothing answers on.
+		if c.IngressAddr == "" {
+			return errors.New("snapshot URL base requires an ingress listen address")
+		}
 	}
 	return nil
+}
+
+// parseTrustedCIDRs turns the flag value into the network list. An empty value
+// keeps the default; "any" returns a non-nil empty slice, which disables the
+// check for someone who deliberately fronts the add-on with something else.
+func parseTrustedCIDRs(value string) []string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	if strings.EqualFold(value, "any") {
+		return []string{}
+	}
+	parts := strings.Split(value, ",")
+	networks := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if part = strings.TrimSpace(part); part != "" {
+			networks = append(networks, part)
+		}
+	}
+	return networks
 }
 
 func validateAddress(name, address string) error {
@@ -140,7 +186,7 @@ func validateAddress(name, address string) error {
 // Redacted returns a log-safe configuration summary.
 func (c Config) Redacted() string {
 	return fmt.Sprintf(
-		"listen=%q status=%q credentials=%q registry=%q mqtt_host=%q mqtt_port=%d mqtt_user_set=%t mqtt_password_set=%t stream_url=%q snapshot_base=%q go2rtc_required=%t go2rtc_url=%q shutdown_timeout=%s temperature_poll_interval=%s",
+		"listen=%q status=%q credentials=%q registry=%q mqtt_host=%q mqtt_port=%d mqtt_user_set=%t mqtt_password_set=%t stream_url=%q snapshot_base=%q ingress=%q go2rtc_required=%t go2rtc_url=%q shutdown_timeout=%s temperature_poll_interval=%s",
 		c.ListenAddr,
 		c.StatusAddr,
 		c.CredentialsPath,
@@ -151,6 +197,7 @@ func (c Config) Redacted() string {
 		c.MQTT.Password != "",
 		c.StreamURL,
 		c.SnapshotBase,
+		c.IngressAddr,
 		c.Go2RTCRequired,
 		c.Go2RTCURL,
 		c.ShutdownTimeout,

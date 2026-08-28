@@ -100,7 +100,9 @@ func TestWriteGo2RTCConfigCanDisableBundledWebRTC(t *testing.T) {
 	if err := json.Unmarshal(raw, &config); err != nil {
 		t.Fatal(err)
 	}
-	if config.API.Listen != ":1984" || config.WebRTC.Listen != "" || config.RTSP.Listen != ":8555" {
+	// The API stays on container loopback in both modes: it is unauthenticated
+	// and returns the camera access token and RTSP password.
+	if config.API.Listen != "127.0.0.1:1984" || config.WebRTC.Listen != "" || config.RTSP.Listen != ":8555" {
 		t.Fatalf("external media config = %#v", config)
 	}
 }

@@ -1,5 +1,63 @@
 # Changelog
 
+## 0.6.0
+
+Security review against Home Assistant's
+[app security guidance](https://developers.home-assistant.io/docs/apps/security/),
+plus the snapshot fix that review turned up. Existing add-on options stay valid.
+
+**Upgrade note.** The go2rtc API is no longer published on the host. If you
+pointed something at `http://<host>:1984` yourself, use the Web UI through
+Ingress instead. RTSP (`8555`) and WebRTC (`8556`) are unchanged, so cameras
+already added through the Generic Camera integration keep working.
+
+### Fixed
+
+- **Camera snapshots returned 500.** Two causes, both fixed. The add-on image
+  had no `ffmpeg`, which go2rtc needs to turn an H264 keyframe into a JPEG, so
+  every still-image request failed at the source. And Home Assistant abandons an
+  image fetch after ten seconds, which a cold camera cannot meet: the relay
+  tunnel, the camera stream and the transcode all have to start first. The
+  bridge now serves the still image itself — one fetch per camera at a time,
+  continuing after the requester gave up, with a recent frame answering
+  immediately and a slightly stale frame preferred over an error.
+- **The snapshot URL depended on `stream_host` resolving from Home Assistant**
+  and on a published host port. It is now fetched from the add-on by its
+  Supervisor hostname, which always resolves and needs no port mapping.
+
+### Security
+
+- **The Web UI is authenticated.** Ingress pointed straight at go2rtc, which has
+  no authentication of its own, and go2rtc's port was published on the host as
+  well. Anyone on the local network could therefore read `/api/config` — the
+  camera access token and RTSP password are in it — and could make go2rtc build
+  a stream from any source, `exec:` included, which is command execution inside
+  the container. Ingress now points at the bridge, go2rtc binds container
+  loopback, and a request only reaches it when it comes from the Supervisor
+  network, carries the `X-Remote-User-Id` header the Supervisor attaches to an
+  authenticated Ingress session, is a read or a WebRTC/MSE negotiation, and
+  names a stream this add-on configured.
+- **Only the media ports are published.** The Web UI, snapshots and the health
+  endpoint travel over the internal Supervisor network; the watchdog polls the
+  container port directly. Both listeners also refuse peers outside that network
+  themselves.
+- **The published snapshot URL carries a token**, persisted in
+  `/data/snapshot-token` so a restart does not break a URL Home Assistant
+  already holds. It is never logged.
+- An **AppArmor profile** ships with the add-on, and the sidebar panel is
+  administrator-only.
+- `tools/ci/check_addon.py` now fails the build on a published go2rtc API port,
+  a missing AppArmor profile, a missing `ffmpeg`, a watchdog that depends on a
+  host port mapping, or any Supervisor API role or host privilege being
+  requested.
+
+### Changed
+
+- `ingress_port` is `8099`, served by the bridge rather than by go2rtc.
+- `-snapshot-url-base` now names the bridge's own public base URL rather than a
+  go2rtc address; `-ingress`, `-ingress-trusted-cidr` and `-snapshot-token-file`
+  are new.
+
 ## 0.5.2
 
 ### Fixed
