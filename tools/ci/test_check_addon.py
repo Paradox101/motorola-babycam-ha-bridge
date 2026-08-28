@@ -10,7 +10,10 @@ name: Motorola Nursery Bridge
 version: "0.2.0"
 slug: vm65_bridge
 arch: [amd64, aarch64]
+ingress: true
+ingress_port: 1984
 ports:
+  1984/tcp: 1984
   8557/tcp: 8558
 watchdog: "http://[HOST]:[PORT:8557]/healthz"
 options:
@@ -58,6 +61,21 @@ class ValidateAddonTests(unittest.TestCase):
         errors = self.validate(build_yaml="build_from: {}\n")
         self.assertIn("deprecated build.yaml must be removed", errors)
 
+    def test_rejects_a_port_based_webui_link(self):
+        errors = self.validate(VALID_CONFIG + '\nwebui: "http://[HOST]:[PORT:1984]/"\n')
+        self.assertIn(
+            "webui must not be set; serve the Web UI through ingress instead", errors
+        )
+
+    def test_requires_ingress_for_the_web_ui(self):
+        errors = self.validate(VALID_CONFIG.replace("ingress: true", "ingress: false"))
+        self.assertIn(
+            "ingress must be enabled so the Web UI works off the local network", errors
+        )
+
+    def test_ingress_port_must_be_a_declared_container_port(self):
+        errors = self.validate(VALID_CONFIG.replace("ingress_port: 1984", "ingress_port: 9999"))
+        self.assertIn("ingress_port 9999 is not a declared container port", errors)
 
 if __name__ == "__main__":
     unittest.main()
