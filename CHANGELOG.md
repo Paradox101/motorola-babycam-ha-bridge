@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.8.0
+
+Cameras now appear in Home Assistant by themselves, and the Web UI is the
+add-on's own camera page instead of go2rtc's debugging interface.
+
+### Added
+
+- **A camera entity per camera, through MQTT Discovery.** No Generic Camera
+  integration to add by hand for a working camera in Home Assistant. Home
+  Assistant's camera platform reads image bytes from a topic — it has no stream
+  URL at all — so the add-on feeds it a still every
+  `camera_refresh_interval` seconds. Entities work with dashboard tiles,
+  `camera.snapshot` and automations.
+- Add-on option `camera_refresh_interval`, in seconds, default 60, range 5–3600.
+  `0` publishes no frames and creates no camera entity: every refresh makes the
+  media server pull a frame over the relay, so the cost is the user's to choose.
+- **The add-on's own Web UI.** Per camera: a still, live WebRTC video on demand,
+  whether the relay tunnel is up, how many people are watching, and the
+  temperature when the camera reports one. Each card copies the RTSP URL and can
+  restart that one camera's bridge — a tunnel that went bad recovers from it
+  while every other camera keeps streaming.
+
+### Changed
+
+- go2rtc's own page and API are no longer served through Ingress. go2rtc stays
+  behind the new page and is reached only for the media endpoints the player
+  needs, still through the proxy that refuses anything but a read of a
+  configured stream. The page loads nothing from the network, like the pairing
+  page.
+- Live video no longer requires the Generic Camera integration to watch at all;
+  it is still the way to put a live stream on a Home Assistant dashboard, and
+  the Web UI has a copy button for the URL it wants.
+
 ## 0.7.0
 
 Pairing moves into the add-on Web UI. No configuration, no second restart, and

@@ -247,6 +247,57 @@ func (r *Runtime) Reload(registry Registry) error {
 // Reconnects reports how many times a camera bridge has been restarted.
 func (r *Runtime) Reconnects() uint64 { return r.restarts.Load() }
 
+// CameraState is one camera's live runtime state, for the Web UI.
+type CameraState struct {
+	ID             string
+	Name           string
+	Model          string
+	StreamName     string
+	Serving        bool
+	ActiveSessions int64
+}
+
+// Cameras reports the live state of every camera the runtime supervises.
+func (r *Runtime) Cameras() []CameraState {
+	r.mu.Lock()
+	supervisors := make([]*cameraSupervisor, 0, len(r.cameras))
+	for _, supervisor := range r.cameras {
+		supervisors = append(supervisors, supervisor)
+	}
+	r.mu.Unlock()
+
+	states := make([]CameraState, 0, len(supervisors))
+	for _, supervisor := range supervisors {
+		_, active := supervisor.stats()
+		states = append(states, CameraState{
+			ID:             cameraKey(supervisor.camera),
+			Name:           supervisor.camera.Credentials.DeviceName,
+			Model:          supervisor.camera.Credentials.Model,
+			StreamName:     supervisor.camera.StreamName,
+			Serving:        supervisor.serving(),
+			ActiveSessions: active,
+		})
+	}
+	return states
+}
+
+// RestartCamera closes one camera's server so its supervisor rebuilds it. A
+// relay tunnel that went bad recovers from exactly this, and it leaves every
+// other camera streaming.
+func (r *Runtime) RestartCamera(id string) error {
+	r.mu.Lock()
+	supervisor := r.cameras[id]
+	r.mu.Unlock()
+	if supervisor == nil {
+		return errors.New("no such camera")
+	}
+	// The supervise loop treats a server that stopped on its own as a failure
+	// and starts a new one after its backoff, which is the behaviour wanted
+	// here; nothing else has to be told about it.
+	supervisor.closeServer()
+	return nil
+}
+
 // CameraAvailability reports, per camera identifier, whether that camera's
 // bridge is currently serving. Integrations use it to mark one camera
 // unavailable without touching the ones that still work.

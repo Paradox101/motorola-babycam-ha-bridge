@@ -62,22 +62,30 @@ a different broker. Everything is retained and republished after a broker
 reconnect, and each camera has its own availability, so one failed camera shows
 as unavailable while the others keep working.
 
-### Adding the live video
+### Live video
 
-Home Assistant has no MQTT Discovery mechanism for an RTSP stream: its MQTT
-camera platform reads image bytes from a topic and has no stream URL at all.
-The video is therefore added once, by hand:
+The add-on's own Web UI plays live video: open it from the sidebar and press
+**Watch live** on a camera. That is WebRTC straight from the bundled media
+server, so it starts in well under a second and needs no setup at all.
+
+Inside Home Assistant itself, each camera arrives as a **camera entity** through
+MQTT Discovery, refreshed every `camera_refresh_interval` seconds. That is
+enough for a dashboard tile, a `camera.snapshot` action or an automation, and it
+costs nothing to set up.
+
+Home Assistant cannot discover a *stream* over MQTT — its camera platform reads
+image bytes from a topic and has no stream URL at all — so live video on a
+Home Assistant dashboard still needs one manual step:
 
 1. **Settings > Devices & services > Add integration > Generic Camera**.
-2. Leave the still image URL empty. The add-on already publishes a snapshot
-   image entity per camera over MQTT Discovery, and the URL behind it is
-   authorized by a token that only Home Assistant receives.
+2. Leave the still image URL empty; the camera and image entities already cover
+   stills.
 3. Set the stream source to `rtsp://<stream_host>:<mapped-8555-port>/vm65`
    (use another stream name for the other cameras).
 4. Choose `RTSP transport: TCP`.
 
-The add-on log prints the exact stream URLs on start. The snapshot image entity
-from MQTT works without this step; only live video needs it.
+The add-on log prints the exact stream URLs on start, and the Web UI has a
+**Copy RTSP URL** button per camera.
 
 Do not copy a temporary `/api/camera_proxy/...token=...` URL into dashboard
 YAML — those tokens expire.
@@ -103,6 +111,7 @@ IP address of the Home Assistant host.
 | `mqtt_username`, `mqtt_password` | Optional broker credentials |
 | `mqtt_discovery_prefix` | Discovery prefix, normally `homeassistant` |
 | `temperature_poll_interval` | Seconds between temperature readings (10–3600, default 30) |
+| `camera_refresh_interval` | Seconds between stills pushed to the Home Assistant camera entity (5–3600, default 60; `0` publishes none and creates no camera entity) |
 | `stream_host` | Hostname advertised in MQTT RTSP URLs (not used for snapshots) |
 | `external_stream_port` | Host port advertised in external mode |
 | `shutdown_timeout` | Graceful child-process shutdown limit in seconds |
@@ -158,6 +167,18 @@ the go2rtc Web UI.
 The page is reachable only through Ingress: it requires the Home Assistant user
 identity the Supervisor attaches to the request, and refuses connections from
 outside the Supervisor network. Only administrators see the add-on panel.
+
+## The Web UI
+
+The Web UI is the add-on's own page, not go2rtc's. It lists cameras rather than
+stream names, and per camera shows a still, live WebRTC video on demand, whether
+the relay tunnel is up, how many people are watching and the temperature when
+the camera reports one. Each card can copy the RTSP URL and restart just that
+camera's bridge — the repair worth having, because a tunnel that went bad
+recovers from it while every other camera keeps streaming.
+
+go2rtc stays behind the page and is reached only for the media endpoints the
+player needs. Its own interface and API are no longer served at all.
 
 ## Snapshots
 

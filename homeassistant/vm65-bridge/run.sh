@@ -26,6 +26,7 @@ MQTT_USERNAME=$(bashio::config 'mqtt_username')
 MQTT_PASSWORD=$(bashio::config 'mqtt_password')
 MQTT_PREFIX=$(bashio::config 'mqtt_discovery_prefix')
 TEMPERATURE_POLL_INTERVAL=$(bashio::config 'temperature_poll_interval')
+CAMERA_REFRESH_INTERVAL=$(bashio::config 'camera_refresh_interval')
 STREAM_HOST=$(bashio::config 'stream_host')
 EXTERNAL_STREAM_PORT=$(bashio::config 'external_stream_port')
 SHUTDOWN_TIMEOUT=$(bashio::config 'shutdown_timeout')
@@ -154,6 +155,9 @@ BRIDGE_ARGS+=( -go2rtc-required -go2rtc-url "http://127.0.0.1:1984/" )
 BRIDGE_ARGS+=( -ingress "0.0.0.0:${INGRESS_PORT}" )
 if [[ "${MQTT_DISCOVERY}" == "true" ]]; then
   BRIDGE_ARGS+=( -mqtt-host "${MQTT_HOST}" -mqtt-port "${MQTT_PORT}" -mqtt-username "${MQTT_USERNAME}" -mqtt-discovery-prefix "${MQTT_PREFIX}" -temperature-poll-interval "${TEMPERATURE_POLL_INTERVAL}s" )
+  # Feeding a camera entity is the only way Home Assistant discovers a camera
+  # over MQTT, so this is what saves adding one by hand. Zero turns it off.
+  BRIDGE_ARGS+=( -camera-refresh-interval "${CAMERA_REFRESH_INTERVAL}s" )
   # Snapshots come from the bundled go2rtc, served and cached by the bridge on
   # the Supervisor network. Home Assistant reaches it by the add-on's internal
   # hostname, so no host port is involved and no name has to resolve on the

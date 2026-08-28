@@ -199,7 +199,17 @@ func URL(base, stream, token string) string {
 	return parsed.String()
 }
 
-func (c *Cache) Handler() http.Handler {
+// Handler serves still images to Home Assistant, which fetches the published
+// URL with no headers of its own and so proves itself with the token.
+func (c *Cache) Handler() http.Handler { return c.handler(true) }
+
+// TrustedHandler serves the same images without the token, for mounting behind
+// a route that has already established who is asking — the Web UI, where the
+// Supervisor has authenticated a Home Assistant user before the page is even
+// rendered.
+func (c *Cache) TrustedHandler() http.Handler { return c.handler(false) }
+
+func (c *Cache) handler(requireToken bool) http.Handler {
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if !c.guard.Allow(request.RemoteAddr) {
 			http.Error(writer, "forbidden", http.StatusForbidden)
@@ -211,7 +221,7 @@ func (c *Cache) Handler() http.Handler {
 			return
 		}
 		query := request.URL.Query()
-		if c.cfg.Token != "" {
+		if requireToken && c.cfg.Token != "" {
 			presented := query.Get("token")
 			if subtle.ConstantTimeCompare([]byte(presented), []byte(c.cfg.Token)) != 1 {
 				http.Error(writer, "unauthorized", http.StatusUnauthorized)
@@ -241,6 +251,20 @@ func (c *Cache) Handler() http.Handler {
 			_, _ = writer.Write(image)
 		}
 	})
+}
+
+// Frame returns the current still image for one stream, using the same cache
+// the HTTP handler serves from. It is how the MQTT camera entity is fed without
+// opening a second connection to the camera for every publish.
+func (c *Cache) Frame(ctx context.Context, stream string) ([]byte, error) {
+	if c == nil {
+		return nil, errors.New("snapshots are not configured")
+	}
+	if !c.streams[stream] {
+		return nil, fmt.Errorf("unknown stream %q", stream)
+	}
+	image, _, err := c.get(ctx, stream)
+	return image, err
 }
 
 // get returns the best frame it can produce within the request budget: a fresh

@@ -12,6 +12,7 @@ setup() {
   export TEST_REFRESH_INTERVAL=60
   export TEST_MQTT_SERVICE=false
   export TEST_TEMPERATURE_POLL_INTERVAL=30
+  export TEST_CAMERA_REFRESH_INTERVAL=60
   export TEST_ADDON_HOSTNAME=local-vm65-bridge
 
   bashio::config() {
@@ -25,6 +26,7 @@ setup() {
       mqtt_port) printf '1883' ;;
       mqtt_discovery_prefix) printf 'homeassistant' ;;
       temperature_poll_interval) printf '%s' "${TEST_TEMPERATURE_POLL_INTERVAL}" ;;
+      camera_refresh_interval) printf '%s' "${TEST_CAMERA_REFRESH_INTERVAL}" ;;
       stream_host) printf 'homeassistant.local' ;;
       external_stream_port) printf '8556' ;;
       shutdown_timeout) printf '1' ;;
@@ -190,6 +192,14 @@ EOF
   run bash homeassistant/vm65-bridge/run.sh
   [ "$status" -eq 7 ]
   ! grep -q -- '-snapshot-url-base' "$CALL_LOG"
+}
+
+@test "MQTT discovery forwards the camera refresh interval" {
+  export TEST_MQTT_DISCOVERY=true
+  export TEST_CAMERA_REFRESH_INTERVAL=120
+  run bash homeassistant/vm65-bridge/run.sh
+  [ "$status" -eq 7 ]
+  grep -q -- '-camera-refresh-interval 120s' "$CALL_LOG"
 }
 
 @test "MQTT discovery forwards the configurable temperature interval" {
