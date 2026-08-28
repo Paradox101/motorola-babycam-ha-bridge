@@ -9,6 +9,7 @@ ARG GO_VERSION=1.27.0
 
 FROM golang:${GO_VERSION}-alpine AS build
 RUN apk add --no-cache git
+COPY config.yaml /tmp/vm65-addon-config.yaml
 # The add-on builds from the release branch, not from a version tag. A tag can
 # only be created after the commit that names it, so pinning to one left every
 # build broken in the window between the release commit and the tag push. The

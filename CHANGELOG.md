@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.2
+
+### Fixed
+
+- Add-on builds now invalidate the cached source-clone layer whenever add-on
+  metadata changes. This prevents a new add-on version from running stale
+  bridge binaries that do not recognize newly added command-line options.
+
 ## 0.5.1
 
 ### Added

@@ -27,7 +27,7 @@ class ValidateAddonTests(unittest.TestCase):
     def validate(
         self,
         config=VALID_CONFIG,
-        dockerfile="FROM example/image:1.2.3\n",
+        dockerfile="FROM example/image:1.2.3\nCOPY config.yaml /tmp/addon-config.yaml\nRUN git clone https://example.test/repo /src\n",
         build_yaml=None,
     ):
         with tempfile.TemporaryDirectory() as directory:
@@ -50,8 +50,12 @@ class ValidateAddonTests(unittest.TestCase):
         self.assertIn("options/schema keys differ: mqtt_discovery", errors)
 
     def test_rejects_mutable_latest_image(self):
-        errors = self.validate(dockerfile="FROM example/image:latest\n")
+        errors = self.validate(dockerfile="FROM example/image:latest\nCOPY config.yaml /tmp/addon-config.yaml\nRUN git clone https://example.test/repo /src\n")
         self.assertIn("Dockerfile uses mutable image tag: example/image:latest", errors)
+
+    def test_requires_config_copy_before_remote_source_clone(self):
+        errors = self.validate(dockerfile="FROM example/image:1.2.3\nRUN git clone https://example.test/repo /src\n")
+        self.assertIn("Dockerfile must copy config.yaml before cloning remote source", errors)
 
     def test_watchdog_must_reference_declared_container_port(self):
         errors = self.validate(VALID_CONFIG.replace("[PORT:8557]", "[PORT:9999]"))
