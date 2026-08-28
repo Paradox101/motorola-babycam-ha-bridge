@@ -2,7 +2,6 @@ package magic
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"io"
 	"net"
@@ -68,10 +67,7 @@ func (r *fakeRelay) serve() {
 		return
 	}
 
-	// 2. Stream connection: frame the relay-open by length, then act as the
-	//    peer. The frame carries no delimiter and may share a TCP segment with
-	//    the first stream bytes, so read it via ReadRelayOpenFrame rather than a
-	//    single naive Read (which was the cause of intermittent hangs).
+	// 2. Stream connection: read the relay-open frame, then act as the peer.
 	stream, err := r.listener.Accept()
 	if err != nil {
 		r.fail(err)
@@ -115,7 +111,12 @@ func (r *fakeRelay) serve() {
 		r.fail(err)
 		return
 	}
-	r.gotRequest <- request
+	plain, err := decoder.Decode(buf[:n])
+	if err != nil {
+		r.fail(err)
+		return
+	}
+	r.gotRequest <- plain
 
 	// Reply through the inverse direction's crypto.
 	cipher, err := encoder.Encode(r.serverReply)

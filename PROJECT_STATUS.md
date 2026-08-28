@@ -1,6 +1,6 @@
 # Project status
 
-Statusdatum: 2026-08-28
+Statusdatum: 2026-08-27
 
 - [done] Statische APK/XAPK-inventarisatie
 - [done] Runtime VM65 live-view-observatie
