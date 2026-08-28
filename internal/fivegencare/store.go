@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 )
 
 // State is the persisted account pairing/session state.
@@ -13,6 +14,15 @@ type State struct {
 	DeviceUUID string        `json:"device_uuid"`
 	Challenge  *OTPChallenge `json:"challenge,omitempty"`
 	Session    *Session      `json:"session,omitempty"`
+
+	// Email is the account the last code was requested for. Remembering it
+	// means a re-pair after a rejected session does not depend on the add-on
+	// option still holding the same address.
+	Email string `json:"email,omitempty"`
+	// ChallengeAt dates the stored challenge. A code the user did not get to
+	// in time has to be replaced rather than retried forever: without this the
+	// only way out of an expired challenge was deleting this file.
+	ChallengeAt time.Time `json:"challenge_at,omitempty"`
 }
 
 // Store atomically persists account state in one private JSON file.
