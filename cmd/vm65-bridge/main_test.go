@@ -64,3 +64,25 @@ func waitForGo2RTC(t *testing.T, state *health.State, want bool) {
 	}
 	t.Fatalf("go2rtc ready = %t, want %t", state.Snapshot().Go2RTCReady, want)
 }
+
+func TestSnapshotURLTargetsTheGo2RTCStillFrameEndpoint(t *testing.T) {
+	cases := []struct {
+		name   string
+		base   string
+		stream string
+		want   string
+	}{
+		{"plain base", "http://homeassistant.local:1984", "vm65", "http://homeassistant.local:1984/api/frame.jpeg?src=vm65"},
+		{"trailing slash", "http://homeassistant.local:1984/", "vm65", "http://homeassistant.local:1984/api/frame.jpeg?src=vm65"},
+		{"name needing escaping", "http://10.0.0.5:1984", "baby room", "http://10.0.0.5:1984/api/frame.jpeg?src=baby+room"},
+		{"no base configured", "", "vm65", ""},
+		{"no stream name", "http://10.0.0.5:1984", "", ""},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := snapshotURL(testCase.base, testCase.stream); got != testCase.want {
+				t.Fatalf("snapshotURL(%q, %q) = %q, want %q", testCase.base, testCase.stream, got, testCase.want)
+			}
+		})
+	}
+}
