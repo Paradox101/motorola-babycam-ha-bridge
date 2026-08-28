@@ -100,6 +100,14 @@ func (s *cameraSupervisor) stats() (total, active int64) {
 	return server.Stats()
 }
 
+// serving reports whether this camera currently has a server accepting
+// connections; between a failure and its restart it has none.
+func (s *cameraSupervisor) serving() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.server != nil
+}
+
 func (s *cameraSupervisor) closeServer() {
 	s.mu.Lock()
 	server := s.server
@@ -238,6 +246,28 @@ func (r *Runtime) Reload(registry Registry) error {
 
 // Reconnects reports how many times a camera bridge has been restarted.
 func (r *Runtime) Reconnects() uint64 { return r.restarts.Load() }
+
+// CameraAvailability reports, per camera identifier, whether that camera's
+// bridge is currently serving. Integrations use it to mark one camera
+// unavailable without touching the ones that still work.
+func (r *Runtime) CameraAvailability() map[string]bool {
+	r.mu.Lock()
+	supervisors := make([]*cameraSupervisor, 0, len(r.cameras))
+	for _, supervisor := range r.cameras {
+		supervisors = append(supervisors, supervisor)
+	}
+	r.mu.Unlock()
+
+	result := make(map[string]bool, len(supervisors))
+	for _, supervisor := range supervisors {
+		id := supervisor.camera.Credentials.DeviceUDID
+		if id == "" {
+			id = supervisor.camera.StreamName
+		}
+		result[id] = supervisor.serving()
+	}
+	return result
+}
 
 func (r *Runtime) startServer(camera Camera) (CameraServer, error) {
 	server, err := r.cfg.NewServer(bridge.Config{

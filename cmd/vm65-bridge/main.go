@@ -106,12 +106,14 @@ func run(cfg appconfig.Config, logger *slog.Logger) error {
 	healthState.SetMQTT(cfg.MQTT.Host != "", false)
 	if cfg.MQTT.Host != "" && primary.DeviceUDID != "" && cfg.StreamURL != "" {
 		discovery = mqttdiscovery.NewService(mqttdiscovery.Config{
-			Host:            cfg.MQTT.Host,
-			Port:            cfg.MQTT.Port,
-			Username:        cfg.MQTT.Username,
-			Password:        cfg.MQTT.Password,
-			DiscoveryPrefix: cfg.MQTT.DiscoveryPrefix,
-			ClientID:        "vm65-bridge-" + primary.DeviceUDID,
+			Host:             cfg.MQTT.Host,
+			Port:             cfg.MQTT.Port,
+			Username:         cfg.MQTT.Username,
+			Password:         cfg.MQTT.Password,
+			DiscoveryPrefix:  cfg.MQTT.DiscoveryPrefix,
+			ClientID:         "vm65-bridge-" + primary.DeviceUDID,
+			Version:          buildinfo.String(),
+			ConfigurationURL: cfg.SnapshotBase,
 			OnConnectionChange: func(connected bool) {
 				healthState.SetMQTT(true, connected)
 			},
@@ -135,6 +137,7 @@ func run(cfg appconfig.Config, logger *slog.Logger) error {
 	}
 
 	logger.Info("starting Motorola Nursery bridge", "listen", cfg.ListenAddr, "cameras", len(registry.Cameras), "control_host", primary.ControlHost)
+	logCameraURLs(cfg, registry, logger)
 	runtime := app.New(app.RuntimeConfig{Registry: registry, Logger: logger, Health: healthState})
 
 	// SIGHUP swaps in freshly written credentials. Cameras whose credentials did
@@ -142,7 +145,59 @@ func run(cfg appconfig.Config, logger *slog.Logger) error {
 	// viewer their picture.
 	go watchForReload(ctx, cfg, runtime, publisher, logger, healthState)
 
+	// Keep the diagnostic entities and per-camera availability in step with the
+	// runtime, so Home Assistant shows which camera is down instead of leaving
+	// every entity looking healthy.
+	if publisher.service != nil {
+		go mirrorStateToMQTT(ctx, publisher.service, runtime, healthState, 5*time.Second)
+	}
+
 	return runtime.Run(ctx)
+}
+
+// logCameraURLs prints the URLs a person needs to add the live video by hand.
+// Home Assistant cannot discover an RTSP stream over MQTT, so these are the
+// values that go into the camera integration.
+func logCameraURLs(cfg appconfig.Config, registry app.Registry, logger *slog.Logger) {
+	if cfg.StreamURL == "" {
+		return
+	}
+	for index, camera := range registry.Cameras {
+		streamName := camera.StreamName
+		if index == 0 {
+			streamName = registry.LegacyAlias
+		}
+		streamURL, err := discoveryStreamURL(cfg.StreamURL, camera.StreamName, index == 0)
+		if err != nil {
+			continue
+		}
+		logger.Info("camera stream ready",
+			"camera", camera.StreamName,
+			"stream_source", streamURL,
+			"still_image_url", snapshotURL(cfg.SnapshotBase, streamName))
+	}
+}
+
+// mirrorStateToMQTT publishes runtime counters and per-camera availability
+// until ctx is cancelled.
+func mirrorStateToMQTT(ctx context.Context, service *mqttdiscovery.Service, runtime *app.Runtime, healthState *health.State, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			snapshot := healthState.Snapshot()
+			_ = service.PublishStatus(ctx, mqttdiscovery.Status{
+				ActiveSessions: snapshot.ActiveSessions,
+				Reconnects:     snapshot.ReconnectsTotal,
+			})
+			for id, available := range runtime.CameraAvailability() {
+				_ = service.SetCameraAvailable(ctx, id, available)
+			}
+		}
+	}
 }
 
 // watchForReload applies a new credential file on SIGHUP until ctx is done.
@@ -209,11 +264,11 @@ func (p *discoveryPublisher) publish(ctx context.Context, cfg appconfig.Config, 
 			return err
 		}
 		if err := p.service.Upsert(ctx, mqttdiscovery.Camera{
-			ID:            camera.Credentials.DeviceUDID,
-			Name:          name,
-			Model:         camera.Credentials.Model,
-			StreamURL:     streamURL,
-			StillImageURL: snapshotURL(cfg.SnapshotBase, streamName),
+			ID:          camera.Credentials.DeviceUDID,
+			Name:        name,
+			Model:       camera.Credentials.Model,
+			StreamURL:   streamURL,
+			SnapshotURL: snapshotURL(cfg.SnapshotBase, streamName),
 		}); err != nil {
 			logger.Warn("MQTT camera discovery unavailable", "camera", camera.StreamName, "err", err)
 			healthState.SetLastError(health.ErrorBroker)
