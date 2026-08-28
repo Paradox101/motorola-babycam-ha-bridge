@@ -68,21 +68,33 @@ fi
 export VM65_OTP_CODE="${OTP_CODE}"
 export VM65_MQTT_PASSWORD="${MQTT_PASSWORD}"
 
+# load_credentials refreshes the camera credentials. With -pair-ui it also
+# serves the pairing page and waits there when the account is not paired yet,
+# so first-time setup is a form in the Web UI rather than two restarts and a
+# trip through the log. Called without arguments during the periodic refresh,
+# where an unattended wait would be wrong.
 load_credentials() {
   local -a setup_args
   local status=0
+  local interactive="${1:-false}"
   bashio::log.info "Refreshing compatible camera credentials from Motorola Nursery"
   setup_args=(-email "${EMAIL}" -control-host "${CONTROL_HOST}" -output "${CREDS}" -registry "${REGISTRY}" -go2rtc-config "${GO2RTC_CFG}")
+  # A code is sent because someone pressed the button in the Web UI, not
+  # because the add-on restarted.
+  setup_args+=( -request-code=false )
   if [[ "${STREAM_BACKEND}" == "external" ]]; then
     setup_args+=( -go2rtc-webrtc=false )
+  fi
+  if [[ "${interactive}" == "true" ]]; then
+    setup_args+=( -pair-ui "0.0.0.0:${INGRESS_PORT}" -status 0.0.0.0:8557 )
   fi
   vm65-setup "${setup_args[@]}" || status=$?
   if (( status != 0 )); then
     # Pairing is a user action, not a crash: say what to do instead of letting
     # the Supervisor restart the add-on in a loop.
     bashio::log.fatal "Could not obtain camera credentials."
-    bashio::log.fatal "If the log above says PAIRING_REQUIRED: set the 'email' option, start the"
-    bashio::log.fatal "add-on once, then copy the code from your inbox into 'otp_code' and start again."
+    bashio::log.fatal "If the log above says PAIRING_REQUIRED: open this add-on in the Home"
+    bashio::log.fatal "Assistant sidebar and complete pairing there."
     return "${status}"
   fi
   return 0
@@ -127,7 +139,9 @@ handle_signal() {
 trap shutdown_children EXIT
 trap handle_signal TERM INT
 
-load_credentials
+# First start: serve the pairing page and wait there if the account is not
+# paired, instead of exiting and letting the Supervisor show a failed add-on.
+load_credentials true
 
 bashio::log.info "Starting Motorola Nursery bridge (backend=${STREAM_BACKEND})"
 BRIDGE_LISTEN=127.0.0.1:8554

@@ -1,5 +1,42 @@
 # Changelog
 
+## 0.7.0
+
+Pairing moves into the add-on Web UI. No configuration, no second restart, and
+no add-on that has to crash to tell you what to do next.
+
+### Added
+
+- **A pairing page behind Ingress.** Start the add-on, click **Open Web UI**,
+  enter the Motorola account address, then the code that arrives by email. The
+  cameras start straight away. The page is served by the add-on itself, renders
+  from inlined markup under `default-src 'none'`, and sits behind the same gate
+  as the rest of the Web UI: the Supervisor's authenticated Home Assistant user,
+  on the Supervisor network, or nothing.
+- **Send a new code**, for when one expires before it is used.
+- While pairing is pending the add-on serves its health endpoint, so the
+  Supervisor watchdog does not restart it out from under whoever is reading
+  their email.
+
+### Fixed
+
+- **An expired code was a dead end.** A stored challenge was never replaced, so
+  a code that expired before it was entered left every subsequent start retrying
+  that same dead code. The only way out was deleting
+  `/data/5gencare-session.json`, which needs SSH or the Samba add-on. Challenges
+  now expire after 15 minutes and are replaced rather than retried; a *wrong*
+  code still keeps the challenge, so a typo costs a retry and not a new email.
+- The paired email address is remembered in the add-on's own state, so clearing
+  the `email` option no longer loses the account it paired with.
+
+### Changed
+
+- The add-on no longer emails a code just because it restarted; a code is sent
+  when someone asks for one. `vm65-setup` keeps the old behaviour by default
+  and takes `-request-code=false`, `-pair-ui` and `-status`.
+- `email` and `otp_code` remain supported for unattended setup and are no longer
+  needed for a normal install.
+
 ## 0.6.0
 
 Security review against Home Assistant's
