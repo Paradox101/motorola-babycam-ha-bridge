@@ -37,23 +37,47 @@ name). Camera tokens remain inside the add-on. Clear the host mappings for
 
 ## Home Assistant
 
-The recommended route is MQTT Discovery: enable `mqtt_discovery`. If the
-Mosquitto add-on is installed, the broker address and credentials come from Home
-Assistant automatically; fill in the `mqtt_*` options only to point at a
-different broker. Camera entities are retained, republished after MQTT reconnect
-and marked unavailable when the add-on disconnects. In bundled mode each entity
-also gets a snapshot image from go2rtc, so it shows a thumbnail in the
-dashboard.
+Enable `mqtt_discovery` and the add-on registers itself as a device with
+diagnostics, plus one device per camera:
+
+| Entity | Kind | What it tells you |
+| --- | --- | --- |
+| Connection | binary_sensor | Whether the bridge process is connected |
+| Active sessions | sensor | How many stream sessions are open right now |
+| Bridge restarts | sensor | How often a camera bridge had to be restarted |
+| `<camera>` Link | binary_sensor | Whether that one camera is reachable |
+| `<camera>` Snapshot | image | A still frame, in bundled mode |
+
+If the Mosquitto add-on is installed the broker address and credentials come
+from Home Assistant automatically; fill in the `mqtt_*` options only to point at
+a different broker. Everything is retained and republished after a broker
+reconnect, and each camera has its own availability, so one failed camera shows
+as unavailable while the others keep working.
+
+### Adding the live video
+
+Home Assistant has no MQTT Discovery mechanism for an RTSP stream: its MQTT
+camera platform reads image bytes from a topic and has no stream URL at all.
+The video is therefore added once, by hand:
+
+1. **Settings > Devices & services > Add integration > Generic Camera**.
+2. Leave the still image URL empty, or use
+   `http://<stream_host>:1984/api/frame.jpeg?src=vm65`.
+3. Set the stream source to `rtsp://<stream_host>:<mapped-8555-port>/vm65`
+   (use another stream name for the other cameras).
+4. Choose `RTSP transport: TCP`.
+
+The add-on log prints the exact URLs on start. The snapshot image entity from
+MQTT works without this step; only live video needs it.
+
+Do not copy a temporary `/api/camera_proxy/...token=...` URL into dashboard
+YAML — those tokens expire.
 
 `stream_host` is the address Home Assistant itself uses to reach the streams, so
 it must resolve **from Home Assistant**. The default `homeassistant.local` relies
 on mDNS, which does not resolve in every setup (some container, VLAN and Docker
-network configurations). If camera entities stay black, set `stream_host` to the
-fixed IP address of the Home Assistant host.
-
-For manual setup, use a Generic Camera or go2rtc/WebRTC integration with the
-republished RTSP URL. Add the resulting camera entity to the dashboard; do not
-copy a temporary `/api/camera_proxy/...token=...` URL into dashboard YAML.
+network configurations). If entities stay black, set `stream_host` to the fixed
+IP address of the Home Assistant host.
 
 ## Options
 

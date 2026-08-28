@@ -17,7 +17,8 @@ stream alias and `vm65_bridge` add-on slug.
 - one isolated Magic WEB2 bridge per camera;
 - optional bundled go2rtc with RTSP, WebRTC, MSE and snapshots;
 - optional external-media-server mode;
-- retained, reconnect-safe Home Assistant MQTT Discovery;
+- Home Assistant MQTT Discovery: per-camera snapshot and link entities, plus
+  bridge diagnostics, all retained and reconnect-safe;
 - Home Assistant Ingress for the Web UI, with snapshot images for each camera;
 - automatic restart of a failed camera bridge, with exponential backoff;
 - liveness, readiness and sanitized status endpoints with live session counters;
@@ -39,9 +40,11 @@ validated on real hardware so far.
    works over any address you already use to reach Home Assistant. The first
    stream remains `vm65`; additional streams use stable names derived from the
    camera names.
-5. Enable `mqtt_discovery` to create camera entities automatically — the broker
-   settings come from Home Assistant when Mosquitto is installed — or add
-   `rtsp://<HA-host>:<configured-RTSP-port>/vm65` manually.
+5. Enable `mqtt_discovery` for the camera and diagnostic entities; the broker
+   settings come from Home Assistant when Mosquitto is installed. Live video is
+   added once through the Generic Camera integration — Home Assistant has no
+   MQTT Discovery path for an RTSP stream — using the URLs the add-on logs on
+   start.
 
 See [the add-on manual](homeassistant/vm65-bridge/DOCS.md) for bundled and
 external mode, port mapping, troubleshooting and upgrades.
