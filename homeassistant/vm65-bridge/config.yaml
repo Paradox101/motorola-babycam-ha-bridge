@@ -1,5 +1,5 @@
 name: Motorola Nursery Bridge
-version: "0.5.2"
+version: "0.6.0"
 slug: vm65_bridge
 description: Publishes compatible Motorola Nursery cameras through Magic WEB2 and optional go2rtc.
 url: https://github.com/Paradox101/motorola-babycam-ha-bridge
@@ -14,22 +14,38 @@ boot: manual
 # breaks for anyone reaching Home Assistant through a domain name, a reverse
 # proxy or Nabu Casa. Ingress serves the same page on whatever host and scheme
 # the browser already uses, with Home Assistant's own authentication.
+#
+# Ingress points at the bridge, not at go2rtc. go2rtc has no authentication of
+# its own: its API hands out the generated configuration — RTSP password and
+# camera access token included — and builds a stream from any source it is
+# given, "exec:" among them. The bridge checks the Supervisor's ingress user
+# header before proxying anything to it, and go2rtc itself stays on container
+# loopback.
 ingress: true
-ingress_port: 1984
+ingress_port: 8099
 panel_icon: mdi:baby-face-outline
+# Only administrators see the sidebar panel.
+panel_admin: true
+# Only the media ports leave the container. Everything Home Assistant itself
+# uses — the Web UI, snapshots and the watchdog — travels over the internal
+# Supervisor network, so it needs no host port at all. go2rtc's own API is not
+# listed: it binds container loopback and is reachable only through the
+# authenticated proxy above.
 ports:
-  1984/tcp: 1984
+  8099/tcp: null
   8555/tcp: 8555
   8556/tcp: 8556
   8556/udp: 8556
-  8557/tcp: 8558
+  8557/tcp: null
 ports_description:
-  1984/tcp: go2rtc API, used for camera snapshots and direct access (the Web UI uses Ingress)
+  8099/tcp: Web UI and camera snapshots; served through Ingress, leave unset
   8555/tcp: go2rtc RTSP republish
   8556/tcp: WebRTC (TCP)
   8556/udp: WebRTC (UDP)
-  8557/tcp: Bridge health endpoint (host 8558)
-watchdog: "http://[HOST]:[PORT:8557]/healthz"
+  8557/tcp: Bridge health endpoint, polled internally by the watchdog
+# A literal container port keeps the watchdog working over the Supervisor
+# network; [PORT:8557] would resolve to a host mapping that no longer exists.
+watchdog: "http://[HOST]:8557/healthz"
 services:
   - mqtt:want
 options:

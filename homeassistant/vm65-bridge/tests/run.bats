@@ -12,6 +12,7 @@ setup() {
   export TEST_REFRESH_INTERVAL=60
   export TEST_MQTT_SERVICE=false
   export TEST_TEMPERATURE_POLL_INTERVAL=30
+  export TEST_ADDON_HOSTNAME=local-vm65-bridge
 
   bashio::config() {
     case "$1" in
@@ -39,12 +40,16 @@ setup() {
       password) printf 'svc-pass' ;;
     esac
   }
+  # The Supervisor names the add-on on its internal network; Home Assistant
+  # fetches snapshots by that name. An empty value stands for a Supervisor that
+  # could not be asked.
+  bashio::addon.hostname() { [ -n "${TEST_ADDON_HOSTNAME}" ] && printf '%s' "${TEST_ADDON_HOSTNAME}"; }
   bashio::log.info() { :; }
   bashio::log.warning() { :; }
   bashio::log.fatal() { printf 'fatal %s\n' "$*" >> "$CALL_LOG"; }
   bashio::exit.nok() { return 1; }
   export -f bashio::config bashio::log.info bashio::log.warning bashio::log.fatal \
-    bashio::exit.nok bashio::services.available bashio::services
+    bashio::exit.nok bashio::services.available bashio::services bashio::addon.hostname
 
   # The long-running fakes exec their sleep: killing the recorded PID then kills
   # the process that holds the output pipe, instead of orphaning a child that
@@ -120,12 +125,31 @@ EOF
   ! grep -q 'svc-pass' "$CALL_LOG"
 }
 
-@test "bundled mode advertises a snapshot URL for Home Assistant" {
+@test "the Web UI listens on the ingress port rather than go2rtc" {
+  export TEST_BACKEND=bundled
+  run bash homeassistant/vm65-bridge/run.sh
+  [ "$status" -eq 7 ]
+  grep -q -- '-ingress 0.0.0.0:8099' "$CALL_LOG"
+}
+
+@test "bundled mode advertises a snapshot URL on the Supervisor network" {
   export TEST_BACKEND=bundled
   export TEST_MQTT_DISCOVERY=true
   run bash homeassistant/vm65-bridge/run.sh
   [ "$status" -eq 7 ]
-  grep -q -- '-snapshot-url-base http://homeassistant.local:1984' "$CALL_LOG"
+  # The add-on's own hostname, not stream_host: it always resolves from Home
+  # Assistant and needs no published port.
+  grep -q -- '-snapshot-url-base http://local-vm65-bridge:8099' "$CALL_LOG"
+  grep -q -- '-snapshot-token-file /data/snapshot-token' "$CALL_LOG"
+}
+
+@test "snapshots fall back to stream_host when the Supervisor cannot be asked" {
+  export TEST_BACKEND=bundled
+  export TEST_MQTT_DISCOVERY=true
+  export TEST_ADDON_HOSTNAME=
+  run bash homeassistant/vm65-bridge/run.sh
+  [ "$status" -eq 7 ]
+  grep -q -- '-snapshot-url-base http://homeassistant.local:8099' "$CALL_LOG"
 }
 
 @test "external mode leaves snapshots to the existing media server" {

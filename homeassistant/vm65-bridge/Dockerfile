@@ -35,6 +35,12 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" \
 FROM alexxit/go2rtc:1.9.14 AS go2rtc
 
 FROM ghcr.io/home-assistant/${BUILD_ARCH}-base:3.19
+# go2rtc needs ffmpeg to turn an H264 keyframe into a JPEG. Without it every
+# still-image request fails, which reaches Home Assistant as a 500 from its
+# image proxy and leaves the snapshot entity permanently broken. The official
+# go2rtc image bundles ffmpeg; only the binary is copied from it, so it has to
+# be installed here.
+RUN apk add --no-cache ffmpeg
 COPY --from=build /out/vm65-bridge /usr/local/bin/vm65-bridge
 COPY --from=build /out/vm65-setup /usr/local/bin/vm65-setup
 COPY --from=go2rtc /usr/local/bin/go2rtc /usr/local/bin/go2rtc

@@ -106,3 +106,80 @@ func TestLoadRejectsInvalidMQTTConfigurationWithoutLeakingSecret(t *testing.T) {
 		})
 	}
 }
+
+func TestIngressAndSnapshotConfiguration(t *testing.T) {
+	base := []string{"-mqtt-host", "broker", "-stream-url", "rtsp://host/camera"}
+	tests := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{
+			// The bridge serves the snapshots itself, so advertising a URL
+			// without that listener would publish an address nothing answers.
+			name: "snapshot base without an ingress listener",
+			args: append(base, "-snapshot-url-base", "http://local-vm65-bridge:8099"),
+			want: "requires an ingress listen address",
+		},
+		{
+			name: "relative snapshot base",
+			args: append(base, "-snapshot-url-base", "local-vm65-bridge:8099", "-ingress", "0.0.0.0:8099"),
+			want: "snapshot URL base",
+		},
+		{
+			name: "ingress address without a port",
+			args: append(base, "-ingress", "0.0.0.0"),
+			want: "ingress address",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := Load(test.args, nil); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("error = %v, want text %q", err, test.want)
+			}
+		})
+	}
+
+	cfg, err := Load(append(base,
+		"-ingress", "0.0.0.0:8099",
+		"-snapshot-url-base", "http://local-vm65-bridge:8099",
+		"-snapshot-token-file", "/data/snapshot-token",
+	), nil)
+	if err != nil {
+		t.Fatalf("valid configuration rejected: %v", err)
+	}
+	if cfg.IngressAddr != "0.0.0.0:8099" || cfg.SnapshotTokenFile != "/data/snapshot-token" {
+		t.Fatalf("config = %#v", cfg)
+	}
+	if !strings.Contains(cfg.Redacted(), `ingress="0.0.0.0:8099"`) {
+		t.Fatalf("redacted config omits the ingress address: %s", cfg.Redacted())
+	}
+}
+
+func TestTrustedCIDRParsing(t *testing.T) {
+	// Nil means "the Supervisor network"; an empty, non-nil slice is the
+	// deliberate opt-out.
+	cfg, err := Load([]string{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.IngressTrustedCIDRs != nil {
+		t.Fatalf("default trusted CIDRs = %#v, want nil", cfg.IngressTrustedCIDRs)
+	}
+
+	cfg, err = Load([]string{"-ingress-trusted-cidr", "any"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.IngressTrustedCIDRs == nil || len(cfg.IngressTrustedCIDRs) != 0 {
+		t.Fatalf(`"any" = %#v, want an empty non-nil slice`, cfg.IngressTrustedCIDRs)
+	}
+
+	cfg, err = Load([]string{"-ingress-trusted-cidr", "172.30.32.0/23, 10.0.0.0/8 ,"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.IngressTrustedCIDRs) != 2 || cfg.IngressTrustedCIDRs[1] != "10.0.0.0/8" {
+		t.Fatalf("trusted CIDRs = %#v", cfg.IngressTrustedCIDRs)
+	}
+}
