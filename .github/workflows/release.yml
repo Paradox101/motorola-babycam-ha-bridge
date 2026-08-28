@@ -35,10 +35,12 @@ jobs:
         shell: bash
         run: |
           mkdir -p dist
+          version_flag="-X github.com/local/motorola-vm65-bridge/internal/buildinfo.Version=${GITHUB_REF_NAME}"
           for arch in amd64 arm64; do
-            CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -trimpath -ldflags="-s -w" -o "dist/vm65-bridge-linux-$arch" ./cmd/vm65-bridge
-            CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -trimpath -ldflags="-s -w" -o "dist/vm65-setup-linux-$arch" ./cmd/vm65-setup
+            CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -trimpath -ldflags="-s -w $version_flag" -o "dist/vm65-bridge-linux-$arch" ./cmd/vm65-bridge
+            CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -trimpath -ldflags="-s -w $version_flag" -o "dist/vm65-setup-linux-$arch" ./cmd/vm65-setup
           done
+          ./dist/vm65-bridge-linux-amd64 -version
           cd dist
           sha256sum vm65-* > checksums.txt
       - name: Publish GitHub release
