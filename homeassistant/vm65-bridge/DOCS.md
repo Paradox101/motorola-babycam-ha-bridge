@@ -17,7 +17,10 @@ session triggers a new pairing request.
 ## Streaming modes
 
 `stream_backend: bundled` is the default. The add-on starts go2rtc and generates
-streams for every camera. Open the Web UI on port 1984. The first camera is
+streams for every camera. Open the Web UI with the **Open Web UI** button: it is
+served through Home Assistant Ingress, so it works over whatever address you
+already use to reach Home Assistant — a local IP, a domain name, a reverse proxy
+or Nabu Casa — and it inherits Home Assistant's own login. The first camera is
 always also available as `vm65`; other names are derived from their Nursery app
 names. The republished RTSP URL is:
 
@@ -34,9 +37,19 @@ name). Camera tokens remain inside the add-on. Clear the host mappings for
 
 ## Home Assistant
 
-The recommended route is MQTT Discovery: enable `mqtt_discovery` and configure
-the broker fields. Camera entities are retained, republished after MQTT
-reconnect and marked unavailable when the add-on disconnects.
+The recommended route is MQTT Discovery: enable `mqtt_discovery`. If the
+Mosquitto add-on is installed, the broker address and credentials come from Home
+Assistant automatically; fill in the `mqtt_*` options only to point at a
+different broker. Camera entities are retained, republished after MQTT reconnect
+and marked unavailable when the add-on disconnects. In bundled mode each entity
+also gets a snapshot image from go2rtc, so it shows a thumbnail in the
+dashboard.
+
+`stream_host` is the address Home Assistant itself uses to reach the streams, so
+it must resolve **from Home Assistant**. The default `homeassistant.local` relies
+on mDNS, which does not resolve in every setup (some container, VLAN and Docker
+network configurations). If camera entities stay black, set `stream_host` to the
+fixed IP address of the Home Assistant host.
 
 For manual setup, use a Generic Camera or go2rtc/WebRTC integration with the
 republished RTSP URL. Add the resulting camera entity to the dashboard; do not
@@ -65,14 +78,28 @@ All version 0.2.0 option names remain valid.
 
 | Container port | Service |
 | --- | --- |
-| `1984/tcp` | go2rtc Web UI/API |
+| `1984/tcp` | go2rtc API: camera snapshots and direct access (the Web UI uses Ingress) |
 | `8555/tcp` | bundled go2rtc RTSP |
 | `8556/tcp,udp` | bundled go2rtc WebRTC |
 | `8557/tcp` | `/healthz`, `/readyz`, `/status` |
 
-If a host port is occupied, change the host-side value only. The Supervisor
-watchdog uses `/healthz`; `/readyz` additionally checks camera listeners and,
-in bundled mode, go2rtc.
+If a host port is occupied, change the host-side value only. The Web UI needs no
+published port at all — Ingress reaches go2rtc inside the add-on — but keep
+`1984/tcp` mapped in bundled mode so Home Assistant can fetch camera snapshots.
+
+The Supervisor watchdog uses `/healthz`, which fails when no camera bridge is
+serving at all. A single failed camera does not trip it: the add-on restarts
+that bridge itself with a backoff, and restarting everything would drop the
+cameras that are still streaming. `/readyz` is stricter and additionally checks
+that every camera listener is up and, in bundled mode, that go2rtc answers.
+`/status` reports live session counts and how often a bridge was restarted.
+
+## Credential refresh
+
+Every `credential_refresh_interval` seconds the add-on fetches fresh camera
+credentials and signals the bridge to adopt them. Cameras whose credentials did
+not change keep streaming, so a routine refresh no longer interrupts a live
+picture. go2rtc is not restarted.
 
 ## Privacy and backups
 
