@@ -11,8 +11,18 @@ FROM golang:${GO_VERSION}-alpine AS build
 RUN apk add --no-cache git
 # Override to build a branch/tag/commit other than the default.
 ARG SOURCE_REF=v0.4.0
-RUN git clone --depth 1 --branch ${SOURCE_REF} \
-    https://github.com/Paradox101/motorola-babycam-ha-bridge /src
+# The release commit bumps this to the new tag, but the tag itself is pushed
+# afterwards. Until it exists every build fails here, and git's own message
+# ("Remote branch vX.Y.Z not found") does not say why or what to do — so say it.
+RUN git clone --depth 1 --branch "${SOURCE_REF}" \
+        https://github.com/Paradox101/motorola-babycam-ha-bridge /src || { \
+        echo "ERROR: '${SOURCE_REF}' does not exist in the repository."; \
+        echo "If this is a freshly released version, its tag was not pushed yet:"; \
+        echo "    git tag -a ${SOURCE_REF} -m 'Motorola Nursery Bridge ${SOURCE_REF#v}'"; \
+        echo "    git push origin ${SOURCE_REF}"; \
+        echo "To build before tagging, pass --build-arg SOURCE_REF=main."; \
+        exit 1; \
+    }
 WORKDIR /src
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" \
     -o /out/vm65-bridge ./cmd/vm65-bridge && \

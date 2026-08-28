@@ -15,6 +15,12 @@ does not publish add-on runtime images.
 5. Create an annotated tag: `git tag -a vX.Y.Z -m "Motorola Nursery Bridge X.Y.Z"`.
 6. Push the tag and branch.
 
+Push the tag immediately after the release commit lands. The add-on Dockerfile
+pins `SOURCE_REF` to that tag, so between the commit and the tag every add-on
+build and update fails to clone it. The build reports this explicitly rather
+than leaving a bare git error. To build before tagging, pass
+`--build-arg SOURCE_REF=main`.
+
 The release workflow rejects lightweight tags, non-SemVer names, a mismatched
 add-on version or a mismatched Dockerfile source reference. It tests the code,
 builds `vm65-bridge` and `vm65-setup` for Linux amd64 and arm64, generates
