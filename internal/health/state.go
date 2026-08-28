@@ -93,6 +93,20 @@ func (s *State) Live() bool {
 	return s.live
 }
 
+// Healthy backs the liveness endpoint the Home Assistant watchdog polls. A
+// process that is up but serving no camera at all is not healthy — that is the
+// state the watchdog exists to catch. A partial outage stays healthy on
+// purpose: the runtime restarts individual bridges itself, and restarting the
+// whole add-on would drop the cameras that are still streaming.
+func (s *State) Healthy() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if !s.live {
+		return false
+	}
+	return s.snapshot.BridgesTotal == 0 || s.snapshot.BridgesReady > 0
+}
+
 func (s *State) Snapshot() Snapshot {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
