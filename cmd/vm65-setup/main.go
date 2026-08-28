@@ -7,6 +7,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"os"
 	"strings"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/local/motorola-vm65-bridge/internal/app"
 	"github.com/local/motorola-vm65-bridge/internal/bridge"
+	"github.com/local/motorola-vm65-bridge/internal/buildinfo"
 	"github.com/local/motorola-vm65-bridge/internal/fivegencare"
 )
 
@@ -43,32 +45,65 @@ type go2RTCConfig struct {
 	Log     go2RTCLogConfig     `json:"log"`
 }
 
+// options are the validated inputs of one setup run.
+type options struct {
+	email        string
+	code         string
+	statePath    string
+	outPath      string
+	registryPath string
+	go2RTCPath   string
+	go2RTCWebRTC bool
+	relayHost    string
+	timeout      time.Duration
+	verbose      bool
+}
+
 func main() {
-	email := flag.String("email", "", "Motorola Nursery account email")
-	code := flag.String("otp-code", os.Getenv("VM65_OTP_CODE"), "deprecated: use VM65_OTP_CODE")
-	statePath := flag.String("state", "/data/5gencare-session.json", "persistent pairing state")
-	outPath := flag.String("output", "/data/creds.json", "legacy first-camera credentials output")
-	registryPath := flag.String("registry", "/data/cameras.json", "all compatible camera credentials output")
-	go2RTCPath := flag.String("go2rtc-config", "", "optional generated go2rtc configuration output")
-	go2RTCWebRTC := flag.Bool("go2rtc-webrtc", true, "enable go2rtc API and WebRTC listeners")
-	relayHost := flag.String("control-host", "vrelay-de0.5gen.care", "Magic relay control host")
+	var opts options
+	flag.StringVar(&opts.email, "email", "", "Motorola Nursery account email")
+	flag.StringVar(&opts.code, "otp-code", os.Getenv("VM65_OTP_CODE"), "deprecated: use VM65_OTP_CODE")
+	flag.StringVar(&opts.statePath, "state", "/data/5gencare-session.json", "persistent pairing state")
+	flag.StringVar(&opts.outPath, "output", "/data/creds.json", "legacy first-camera credentials output")
+	flag.StringVar(&opts.registryPath, "registry", "/data/cameras.json", "all compatible camera credentials output")
+	flag.StringVar(&opts.go2RTCPath, "go2rtc-config", "", "optional generated go2rtc configuration output")
+	flag.BoolVar(&opts.go2RTCWebRTC, "go2rtc-webrtc", true, "enable go2rtc API and WebRTC listeners")
+	flag.StringVar(&opts.relayHost, "control-host", "vrelay-de0.5gen.care", "Magic relay control host")
+	flag.DurationVar(&opts.timeout, "timeout", 30*time.Second, "overall timeout for the account exchange")
+	flag.BoolVar(&opts.verbose, "v", false, "verbose protocol diagnostics (never logs credentials)")
+	showVersion := flag.Bool("version", false, "print the build version and exit")
 	flag.Parse()
-	if err := run(*email, *code, *statePath, *outPath, *registryPath, *go2RTCPath, *go2RTCWebRTC, *relayHost); err != nil {
+
+	if *showVersion {
+		fmt.Println("vm65-setup", buildinfo.String())
+		return
+	}
+	if err := run(opts); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }
 
-func run(email, code, statePath, outPath, registryPath, go2RTCPath string, go2RTCWebRTC bool, relayHost string) error {
-	client := fivegencare.Client{Debug: true}
+func run(opts options) error {
+	level := slog.LevelInfo
+	if opts.verbose {
+		level = slog.LevelDebug
+	}
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
+	logger.Info("pairing Motorola Nursery account", "version", buildinfo.String())
+
+	if opts.timeout <= 0 {
+		return errors.New("timeout must be positive")
+	}
+	client := fivegencare.Client{Logger: logger.With("component", "5gencare"), Timeout: opts.timeout}
 	provider := fivegencare.NewProvider(fivegencare.ProviderConfig{
 		Client:    client,
-		Store:     fivegencare.NewStore(statePath),
-		Email:     email,
-		OTPCode:   code,
-		RelayHost: relayHost,
+		Store:     fivegencare.NewStore(opts.statePath),
+		Email:     opts.email,
+		OTPCode:   opts.code,
+		RelayHost: opts.relayHost,
 	})
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), opts.timeout)
 	defer cancel()
 	cameras, err := provider.Restore(ctx)
 	if err != nil {
@@ -78,18 +113,19 @@ func run(email, code, statePath, outPath, registryPath, go2RTCPath string, go2RT
 		}
 		return fmt.Errorf("load cameras: %w", err)
 	}
-	if err := writeCameraFiles(outPath, registryPath, cameras); err != nil {
+	if err := writeCameraFiles(opts.outPath, opts.registryPath, cameras); err != nil {
 		return err
 	}
-	if go2RTCPath != "" {
+	if opts.go2RTCPath != "" {
 		registry, err := buildCameraRegistry(cameras)
 		if err != nil {
 			return err
 		}
-		if err := writeGo2RTCConfig(go2RTCPath, registry, go2RTCWebRTC); err != nil {
+		if err := writeGo2RTCConfig(opts.go2RTCPath, registry, opts.go2RTCWebRTC); err != nil {
 			return fmt.Errorf("write go2rtc configuration: %w", err)
 		}
 	}
+	logger.Info("camera credentials written", "cameras", len(cameras))
 	return nil
 }
 
