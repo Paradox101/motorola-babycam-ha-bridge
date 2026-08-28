@@ -147,7 +147,11 @@ func TestWebServerServesAnAuthenticatedUIAndTokenisedSnapshots(t *testing.T) {
 	}
 	cfg.IngressAddr = address
 
-	snapshots, err := startWebServer(ctx, cfg, registry, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	healthState := health.NewState(time.Now())
+	healthState.SetLive(true)
+	runtime := app.New(app.RuntimeConfig{Registry: registry, Health: healthState})
+	snapshots, err := startWebServer(ctx, cfg, registry, runtime, newTemperatureStore(), healthState,
+		slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatalf("startWebServer: %v", err)
 	}
@@ -167,7 +171,9 @@ func TestWebServerServesAnAuthenticatedUIAndTokenisedSnapshots(t *testing.T) {
 	}{
 		{"web UI without a Home Assistant session", base + "/", nil, http.StatusUnauthorized},
 		{"web UI through ingress", base + "/", map[string]string{"X-Remote-User-Id": "01HQ"}, http.StatusOK},
-		{"go2rtc configuration", base + "/api/config", map[string]string{"X-Remote-User-Id": "01HQ"}, http.StatusForbidden},
+		{"camera overview", base + "/api/cameras", map[string]string{"X-Remote-User-Id": "01HQ"}, http.StatusOK},
+		// go2rtc's own page and configuration are no longer proxied at all.
+		{"go2rtc configuration", base + "/api/config", map[string]string{"X-Remote-User-Id": "01HQ"}, http.StatusNotFound},
 		{"snapshot without a token", base + "/snapshot?src=vm65", nil, http.StatusUnauthorized},
 		{"snapshot with the token", base + "/snapshot?src=vm65&token=" + snapshots.Token(), nil, http.StatusOK},
 		{"snapshot of an unknown camera", base + "/snapshot?src=exec:id&token=" + snapshots.Token(), nil, http.StatusNotFound},

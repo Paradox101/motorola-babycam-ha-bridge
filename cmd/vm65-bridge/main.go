@@ -20,6 +20,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -32,6 +33,7 @@ import (
 	"github.com/local/motorola-vm65-bridge/internal/ingress"
 	"github.com/local/motorola-vm65-bridge/internal/mqttdiscovery"
 	"github.com/local/motorola-vm65-bridge/internal/snapshot"
+	"github.com/local/motorola-vm65-bridge/internal/webui"
 )
 
 // credsFile is the on-disk shape of the credentials. It mirrors the fields
@@ -106,9 +108,14 @@ func run(cfg appconfig.Config, logger *slog.Logger) error {
 		startHTTPServer(ctx, "health endpoint", cfg.StatusAddr, health.NewHandler(healthState), logger)
 	}
 
+	// The runtime is built before the Web UI so the page can report live camera
+	// state and restart a camera that got stuck.
+	runtime := app.New(app.RuntimeConfig{Registry: registry, Logger: logger, Health: healthState})
+	temperatures := newTemperatureStore()
+
 	// The Web UI and the snapshot endpoint share one listener, the one the
 	// Supervisor reaches through Ingress. Neither is published on the host.
-	snapshots, err := startWebServer(ctx, cfg, registry, logger)
+	snapshots, err := startWebServer(ctx, cfg, registry, runtime, temperatures, healthState, logger)
 	if err != nil {
 		return err
 	}
@@ -122,14 +129,15 @@ func run(cfg appconfig.Config, logger *slog.Logger) error {
 	healthState.SetMQTT(cfg.MQTT.Host != "", false)
 	if cfg.MQTT.Host != "" && primary.DeviceUDID != "" && cfg.StreamURL != "" {
 		discovery = mqttdiscovery.NewService(mqttdiscovery.Config{
-			Host:             cfg.MQTT.Host,
-			Port:             cfg.MQTT.Port,
-			Username:         cfg.MQTT.Username,
-			Password:         cfg.MQTT.Password,
-			DiscoveryPrefix:  cfg.MQTT.DiscoveryPrefix,
-			ClientID:         "vm65-bridge-" + primary.DeviceUDID,
-			Version:          buildinfo.String(),
-			ConfigurationURL: cfg.SnapshotBase,
+			Host:                cfg.MQTT.Host,
+			Port:                cfg.MQTT.Port,
+			Username:            cfg.MQTT.Username,
+			Password:            cfg.MQTT.Password,
+			DiscoveryPrefix:     cfg.MQTT.DiscoveryPrefix,
+			ClientID:            "vm65-bridge-" + primary.DeviceUDID,
+			Version:             buildinfo.String(),
+			ConfigurationURL:    cfg.SnapshotBase,
+			PublishCameraFrames: cfg.CameraRefreshInterval > 0,
 			OnConnectionChange: func(connected bool) {
 				healthState.SetMQTT(true, connected)
 			},
@@ -149,9 +157,12 @@ func run(cfg appconfig.Config, logger *slog.Logger) error {
 				defer cancel()
 				_ = discovery.Close(shutdownContext)
 			}()
+			temperatures.sink = discovery
 			temperatureSupervisor = devicecontrol.NewSupervisor(ctx, devicecontrol.SupervisorConfig{
-				Client:       devicecontrol.Client{},
-				Sink:         discovery,
+				Client: devicecontrol.Client{},
+				// The store both records the reading for the Web UI and passes
+				// it on, so the page does not need its own control link.
+				Sink:         temperatures,
 				PollInterval: cfg.TemperaturePollInterval,
 			})
 			temperatureSupervisor.Reconcile(temperatureCameras(registry))
@@ -161,7 +172,6 @@ func run(cfg appconfig.Config, logger *slog.Logger) error {
 
 	logger.Info("starting Motorola Nursery bridge", "listen", cfg.ListenAddr, "cameras", len(registry.Cameras), "control_host", primary.ControlHost)
 	logCameraURLs(cfg, registry, logger)
-	runtime := app.New(app.RuntimeConfig{Registry: registry, Logger: logger, Health: healthState})
 
 	// SIGHUP swaps in freshly written credentials. Cameras whose credentials did
 	// not change keep streaming, so the periodic refresh no longer costs every
@@ -173,6 +183,11 @@ func run(cfg appconfig.Config, logger *slog.Logger) error {
 	// every entity looking healthy.
 	if publisher.service != nil {
 		go mirrorStateToMQTT(ctx, publisher.service, runtime, healthState, 5*time.Second)
+		// Feeding the camera entity is what puts a camera in Home Assistant
+		// without anyone adding an integration by hand.
+		if cfg.CameraRefreshInterval > 0 && snapshots != nil {
+			go publishCameraFrames(ctx, publisher.service, snapshots, registry, cfg.CameraRefreshInterval, logger)
+		}
 	}
 
 	return runtime.Run(ctx)
@@ -344,10 +359,180 @@ func streamNames(registry app.Registry) []string {
 	return names
 }
 
+// temperatureStore keeps the last reading per camera so the Web UI can show it
+// without opening a second control link, and passes everything on to MQTT.
+type temperatureStore struct {
+	mu        sync.RWMutex
+	celsius   map[string]float64
+	supported map[string]bool
+	sink      devicecontrol.Sink
+}
+
+func newTemperatureStore() *temperatureStore {
+	return &temperatureStore{celsius: map[string]float64{}, supported: map[string]bool{}}
+}
+
+func (t *temperatureStore) SetTemperatureSupported(ctx context.Context, id string, supported bool) error {
+	t.mu.Lock()
+	t.supported[id] = supported
+	if !supported {
+		delete(t.celsius, id)
+	}
+	sink := t.sink
+	t.mu.Unlock()
+	if sink == nil {
+		return nil
+	}
+	return sink.SetTemperatureSupported(ctx, id, supported)
+}
+
+func (t *temperatureStore) SetTemperatureAvailable(ctx context.Context, id string, available bool) error {
+	t.mu.Lock()
+	if !available {
+		delete(t.celsius, id)
+	}
+	sink := t.sink
+	t.mu.Unlock()
+	if sink == nil {
+		return nil
+	}
+	return sink.SetTemperatureAvailable(ctx, id, available)
+}
+
+func (t *temperatureStore) PublishTemperature(ctx context.Context, id string, celsius float64) error {
+	t.mu.Lock()
+	t.celsius[id] = celsius
+	sink := t.sink
+	t.mu.Unlock()
+	if sink == nil {
+		return nil
+	}
+	return sink.PublishTemperature(ctx, id, celsius)
+}
+
+// reading reports the last temperature for one camera, if there is one.
+func (t *temperatureStore) reading(id string) (float64, bool) {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	celsius, ok := t.celsius[id]
+	return celsius, ok
+}
+
+// uiSource adapts the runtime, the health state and the registry to what the
+// Web UI renders.
+type uiSource struct {
+	runtime      *app.Runtime
+	health       *health.State
+	temperatures *temperatureStore
+	streamURLs   map[string]string
+	streamNames  map[string]string
+}
+
+func newUISource(cfg appconfig.Config, registry app.Registry, runtime *app.Runtime, temperatures *temperatureStore, healthState *health.State) *uiSource {
+	source := &uiSource{
+		runtime: runtime, health: healthState, temperatures: temperatures,
+		streamURLs: map[string]string{}, streamNames: map[string]string{},
+	}
+	for index, camera := range registry.Cameras {
+		key := camera.Credentials.DeviceUDID
+		if key == "" {
+			key = camera.StreamName
+		}
+		// The first camera keeps the historical vm65 alias in go2rtc, so that
+		// is the name the player has to ask for.
+		name := camera.StreamName
+		if index == 0 {
+			name = registry.LegacyAlias
+		}
+		source.streamNames[key] = name
+		if url, err := discoveryStreamURL(cfg.StreamURL, camera.StreamName, index == 0); err == nil {
+			source.streamURLs[key] = url
+		}
+	}
+	return source
+}
+
+func (u *uiSource) Overview() webui.Overview {
+	snapshot := u.health.Snapshot()
+	states := u.runtime.Cameras()
+	cameras := make([]webui.Camera, 0, len(states))
+	for _, state := range states {
+		name := state.Name
+		if name == "" {
+			name = "Motorola Nursery Camera"
+		}
+		stream := u.streamNames[state.ID]
+		if stream == "" {
+			stream = state.StreamName
+		}
+		camera := webui.Camera{
+			ID: state.ID, Name: name, Model: state.Model,
+			Stream: stream, StreamURL: u.streamURLs[state.ID],
+			Serving: state.Serving, ActiveSessions: state.ActiveSessions,
+		}
+		if celsius, ok := u.temperatures.reading(state.ID); ok {
+			value := celsius
+			camera.TemperatureCelsius = &value
+		}
+		cameras = append(cameras, camera)
+	}
+	return webui.Overview{
+		Cameras:       cameras,
+		Version:       buildinfo.String(),
+		Ready:         snapshot.Ready,
+		Go2RTCReady:   !snapshot.Go2RTCRequired || snapshot.Go2RTCReady,
+		MQTTEnabled:   snapshot.MQTTEnabled,
+		MQTTConnected: snapshot.MQTTConnected,
+		Reconnects:    snapshot.ReconnectsTotal,
+		UptimeSeconds: snapshot.UptimeSeconds,
+	}
+}
+
+func (u *uiSource) Restart(id string) error { return u.runtime.RestartCamera(id) }
+
+// publishCameraFrames feeds the Home Assistant camera entity. Each frame costs
+// a still from go2rtc, which pulls it over the relay, so the interval is the
+// user's to choose and zero turns the whole thing off.
+func publishCameraFrames(ctx context.Context, service *mqttdiscovery.Service, snapshots *snapshot.Cache, registry app.Registry, interval time.Duration, logger *slog.Logger) {
+	streams := make(map[string]string, len(registry.Cameras))
+	for index, camera := range registry.Cameras {
+		name := camera.StreamName
+		if index == 0 {
+			name = registry.LegacyAlias
+		}
+		streams[camera.Credentials.DeviceUDID] = name
+	}
+
+	publish := func() {
+		for id, stream := range streams {
+			image, err := snapshots.Frame(ctx, stream)
+			if err != nil {
+				logger.Debug("no frame for the camera entity yet", "camera", stream, "err", err)
+				continue
+			}
+			if err := service.PublishFrame(ctx, id, image); err != nil {
+				logger.Warn("could not publish a camera frame", "camera", stream, "err", err)
+			}
+		}
+	}
+	publish()
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			publish()
+		}
+	}
+}
+
 // startWebServer serves the authenticated Web UI and the snapshot endpoint on
 // the Ingress port. It returns the snapshot cache, or nil when no ingress
 // address is configured.
-func startWebServer(ctx context.Context, cfg appconfig.Config, registry app.Registry, logger *slog.Logger) (*snapshot.Cache, error) {
+func startWebServer(ctx context.Context, cfg appconfig.Config, registry app.Registry, runtime *app.Runtime, temperatures *temperatureStore, healthState *health.State, logger *slog.Logger) (*snapshot.Cache, error) {
 	if cfg.IngressAddr == "" {
 		return nil, nil
 	}
@@ -370,22 +555,42 @@ func startWebServer(ctx context.Context, cfg appconfig.Config, registry app.Regi
 		if err != nil {
 			return nil, err
 		}
+		// Home Assistant fetches this one with the token and no headers; the
+		// page behind the Web UI uses the trusted variant instead. Registering
+		// it here keeps it ahead of the catch-all below.
 		mux.Handle(snapshot.Path, snapshots.Handler())
 	}
 
-	webUI, err := ingress.NewHandler(ingress.Config{
+	// go2rtc is still what plays the video, so its media endpoints stay
+	// reachable — through the same proxy as before, which refuses anything but
+	// a read of a stream this add-on configured.
+	media, err := ingress.NewHandler(ingress.Config{
 		Upstream:     cfg.Go2RTCURL,
 		Streams:      names,
 		TrustedCIDRs: cfg.IngressTrustedCIDRs,
 		Logger:       logger.With("component", "ingress"),
 	})
 	if err != nil {
-		if snapshots != nil {
-			snapshots.Close()
-		}
+		snapshots.Close()
 		return nil, err
 	}
-	mux.Handle("/", webUI)
+
+	var stills http.Handler
+	if snapshots != nil {
+		stills = snapshots.TrustedHandler()
+	}
+	ui, err := webui.NewServer(webui.Config{
+		Source:       newUISource(cfg, registry, runtime, temperatures, healthState),
+		TrustedCIDRs: cfg.IngressTrustedCIDRs,
+		Media:        media,
+		Snapshot:     stills,
+		Logger:       logger.With("component", "webui"),
+	})
+	if err != nil {
+		snapshots.Close()
+		return nil, err
+	}
+	mux.Handle("/", ui.Handler())
 
 	startHTTPServer(ctx, "web UI", cfg.IngressAddr, mux, logger)
 	if snapshots != nil {

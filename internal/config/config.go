@@ -45,6 +45,11 @@ type Config struct {
 	Go2RTCURL               string
 	ShutdownTimeout         time.Duration
 	TemperaturePollInterval time.Duration
+	// CameraRefreshInterval is how often a still frame is pushed to the MQTT
+	// camera entity. Zero publishes no frames, and then no camera entity is
+	// created: Home Assistant's camera platform has nothing to show without
+	// them.
+	CameraRefreshInterval time.Duration
 }
 
 // Load parses command-line arguments, applies secret environment overrides,
@@ -76,6 +81,7 @@ func Load(args []string, lookupEnv func(string) (string, bool)) (Config, error) 
 	flags.StringVar(&cfg.Go2RTCURL, "go2rtc-url", "http://127.0.0.1:1984/", "go2rtc readiness endpoint")
 	flags.DurationVar(&cfg.ShutdownTimeout, "shutdown-timeout", 10*time.Second, "graceful shutdown timeout")
 	flags.DurationVar(&cfg.TemperaturePollInterval, "temperature-poll-interval", 30*time.Second, "temperature polling interval when MQTT discovery is enabled")
+	flags.DurationVar(&cfg.CameraRefreshInterval, "camera-refresh-interval", 0, "how often to push a still frame to the Home Assistant camera entity; zero publishes none")
 	if err := flags.Parse(args); err != nil {
 		return Config{}, fmt.Errorf("parse configuration: %w", err)
 	}
@@ -116,6 +122,11 @@ func (c Config) Validate() error {
 	}
 	if c.TemperaturePollInterval < 10*time.Second || c.TemperaturePollInterval > time.Hour {
 		return errors.New("temperature poll interval must be between 10s and 1h")
+	}
+	// Every refresh makes go2rtc pull a frame from the camera over the relay,
+	// so a very short interval is a standing cost on someone's connection.
+	if c.CameraRefreshInterval != 0 && (c.CameraRefreshInterval < 5*time.Second || c.CameraRefreshInterval > time.Hour) {
+		return errors.New("camera refresh interval must be zero or between 5s and 1h")
 	}
 	if c.Go2RTCRequired {
 		parsed, err := url.Parse(c.Go2RTCURL)
@@ -186,7 +197,7 @@ func validateAddress(name, address string) error {
 // Redacted returns a log-safe configuration summary.
 func (c Config) Redacted() string {
 	return fmt.Sprintf(
-		"listen=%q status=%q credentials=%q registry=%q mqtt_host=%q mqtt_port=%d mqtt_user_set=%t mqtt_password_set=%t stream_url=%q snapshot_base=%q ingress=%q go2rtc_required=%t go2rtc_url=%q shutdown_timeout=%s temperature_poll_interval=%s",
+		"listen=%q status=%q credentials=%q registry=%q mqtt_host=%q mqtt_port=%d mqtt_user_set=%t mqtt_password_set=%t stream_url=%q snapshot_base=%q ingress=%q go2rtc_required=%t go2rtc_url=%q shutdown_timeout=%s temperature_poll_interval=%s camera_refresh_interval=%s",
 		c.ListenAddr,
 		c.StatusAddr,
 		c.CredentialsPath,
@@ -202,5 +213,6 @@ func (c Config) Redacted() string {
 		c.Go2RTCURL,
 		c.ShutdownTimeout,
 		c.TemperaturePollInterval,
+		c.CameraRefreshInterval,
 	)
 }
