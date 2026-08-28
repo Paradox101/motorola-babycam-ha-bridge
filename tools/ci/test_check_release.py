@@ -6,7 +6,7 @@ from check_release import validate_release
 
 
 class ValidateReleaseTests(unittest.TestCase):
-    def validate(self, tag="v1.2.3", version="1.2.3", source_ref="v1.2.3"):
+    def validate(self, tag="v1.2.3", version="1.2.3", source_ref="release"):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             addon = root / "homeassistant" / "vm65-bridge"
@@ -30,10 +30,18 @@ class ValidateReleaseTests(unittest.TestCase):
     def test_rejects_version_mismatch(self):
         self.assertIn("add-on version must equal 1.2.3", self.validate(version="1.2.4"))
 
-    def test_rejects_unpinned_source(self):
+    def test_requires_the_release_branch_as_source(self):
         self.assertIn(
-            "Dockerfile SOURCE_REF must equal v1.2.3",
+            "Dockerfile SOURCE_REF must equal release",
             self.validate(source_ref="main"),
+        )
+
+    def test_rejects_a_version_tag_as_source(self):
+        # Pinning to the tag is what broke every add-on build between the
+        # release commit and the tag push.
+        self.assertIn(
+            "Dockerfile SOURCE_REF must equal release",
+            self.validate(source_ref="v1.2.3"),
         )
 
 

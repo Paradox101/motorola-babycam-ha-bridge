@@ -57,8 +57,12 @@ stay valid; no configuration change is required to upgrade.
 - Live video is added once through the Generic Camera integration; Home
   Assistant has no MQTT Discovery path for an RTSP stream. The add-on logs the
   exact URLs at startup.
-- The add-on build explains itself when `SOURCE_REF` does not exist yet, instead
-  of failing with a bare "Remote branch not found" from git.
+- The add-on builds from a `release` branch instead of the version tag. A tag
+  cannot exist before the commit that names it, so pinning to one broke every
+  add-on build and update between the release commit and the tag push. The
+  branch always exists, `SOURCE_REF` is no longer bumped per version, and
+  publishing to Home Assistant no longer depends on tagging. The build also
+  explains itself now instead of failing with a bare "Remote branch not found".
 
 ## 0.3.0
 
