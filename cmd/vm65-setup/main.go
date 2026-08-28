@@ -174,10 +174,14 @@ func buildCameraRegistry(cameras []fivegencare.CameraCredentials) (cameraRegistr
 func writeGo2RTCConfig(path string, registry cameraRegistry, enableWebRTC bool) error {
 	config := go2RTCConfig{
 		Streams: make(map[string][]string, len(registry.Cameras)+1),
-		API:     go2RTCListenConfig{Listen: ":1984"},
-		RTSP:    go2RTCListenConfig{Listen: ":8555"},
-		WebRTC:  go2RTCListenConfig{Listen: ":8556"},
-		Log:     go2RTCLogConfig{Level: "info"},
+		// go2rtc's API is unauthenticated and returns this very file, camera
+		// access token and RTSP password included, so it stays on container
+		// loopback. The bridge proxies it to Home Assistant Ingress after
+		// checking the Supervisor's ingress user header.
+		API:    go2RTCListenConfig{Listen: "127.0.0.1:1984"},
+		RTSP:   go2RTCListenConfig{Listen: ":8555"},
+		WebRTC: go2RTCListenConfig{Listen: ":8556"},
+		Log:    go2RTCLogConfig{Level: "info"},
 	}
 	if !enableWebRTC {
 		config.WebRTC.Listen = ""

@@ -20,7 +20,6 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 
@@ -30,7 +29,9 @@ import (
 	appconfig "github.com/local/motorola-vm65-bridge/internal/config"
 	"github.com/local/motorola-vm65-bridge/internal/devicecontrol"
 	"github.com/local/motorola-vm65-bridge/internal/health"
+	"github.com/local/motorola-vm65-bridge/internal/ingress"
 	"github.com/local/motorola-vm65-bridge/internal/mqttdiscovery"
+	"github.com/local/motorola-vm65-bridge/internal/snapshot"
 )
 
 // credsFile is the on-disk shape of the credentials. It mirrors the fields
@@ -102,11 +103,22 @@ func run(cfg appconfig.Config, logger *slog.Logger) error {
 	}
 
 	if cfg.StatusAddr != "" {
-		startHealthServer(ctx, cfg.StatusAddr, health.NewHandler(healthState), logger)
+		startHTTPServer(ctx, "health endpoint", cfg.StatusAddr, health.NewHandler(healthState), logger)
 	}
+
+	// The Web UI and the snapshot endpoint share one listener, the one the
+	// Supervisor reaches through Ingress. Neither is published on the host.
+	snapshots, err := startWebServer(ctx, cfg, registry, logger)
+	if err != nil {
+		return err
+	}
+	if snapshots != nil {
+		defer snapshots.Close()
+	}
+
 	var discovery *mqttdiscovery.Service
 	var temperatureSupervisor *devicecontrol.Supervisor
-	publisher := &discoveryPublisher{}
+	publisher := &discoveryPublisher{snapshotToken: snapshots.Token()}
 	healthState.SetMQTT(cfg.MQTT.Host != "", false)
 	if cfg.MQTT.Host != "" && primary.DeviceUDID != "" && cfg.StreamURL != "" {
 		discovery = mqttdiscovery.NewService(mqttdiscovery.Config{
@@ -174,18 +186,14 @@ func logCameraURLs(cfg appconfig.Config, registry app.Registry, logger *slog.Log
 		return
 	}
 	for index, camera := range registry.Cameras {
-		streamName := camera.StreamName
-		if index == 0 {
-			streamName = registry.LegacyAlias
-		}
 		streamURL, err := discoveryStreamURL(cfg.StreamURL, camera.StreamName, index == 0)
 		if err != nil {
 			continue
 		}
-		logger.Info("camera stream ready",
-			"camera", camera.StreamName,
-			"stream_source", streamURL,
-			"still_image_url", snapshotURL(cfg.SnapshotBase, streamName))
+		// The still-image URL is deliberately not logged: it carries the
+		// snapshot token, and Home Assistant receives it over MQTT discovery
+		// rather than from someone copying it out of the log.
+		logger.Info("camera stream ready", "camera", camera.StreamName, "stream_source", streamURL)
 	}
 }
 
@@ -271,6 +279,8 @@ func temperatureCameras(registry app.Registry) []devicecontrol.Camera {
 type discoveryPublisher struct {
 	service   *mqttdiscovery.Service
 	published []string
+	// snapshotToken authorizes the snapshot URL published to Home Assistant.
+	snapshotToken string
 }
 
 func (p *discoveryPublisher) publish(ctx context.Context, cfg appconfig.Config, registry app.Registry, logger *slog.Logger, healthState *health.State) error {
@@ -297,7 +307,7 @@ func (p *discoveryPublisher) publish(ctx context.Context, cfg appconfig.Config, 
 			Name:        name,
 			Model:       camera.Credentials.Model,
 			StreamURL:   streamURL,
-			SnapshotURL: snapshotURL(cfg.SnapshotBase, streamName),
+			SnapshotURL: snapshot.URL(cfg.SnapshotBase, streamName, p.snapshotToken),
 		}); err != nil {
 			logger.Warn("MQTT camera discovery unavailable", "camera", camera.StreamName, "err", err)
 			healthState.SetLastError(health.ErrorBroker)
@@ -319,19 +329,72 @@ func (p *discoveryPublisher) publish(ctx context.Context, cfg appconfig.Config, 
 	return nil
 }
 
-// snapshotURL points Home Assistant at go2rtc's still-frame endpoint so the
-// camera entity has a thumbnail. Empty base means no snapshot is advertised.
-func snapshotURL(base, streamName string) string {
-	if base == "" || streamName == "" {
-		return ""
+// streamNames lists every go2rtc stream this add-on owns, including the
+// historical vm65 alias. Nothing outside this list may be named in a request:
+// go2rtc turns an unknown src into a new stream, and "exec:" is one of its
+// source schemes.
+func streamNames(registry app.Registry) []string {
+	names := make([]string, 0, len(registry.Cameras)+1)
+	if registry.LegacyAlias != "" {
+		names = append(names, registry.LegacyAlias)
 	}
-	parsed, err := url.Parse(base)
+	for _, camera := range registry.Cameras {
+		names = append(names, camera.StreamName)
+	}
+	return names
+}
+
+// startWebServer serves the authenticated Web UI and the snapshot endpoint on
+// the Ingress port. It returns the snapshot cache, or nil when no ingress
+// address is configured.
+func startWebServer(ctx context.Context, cfg appconfig.Config, registry app.Registry, logger *slog.Logger) (*snapshot.Cache, error) {
+	if cfg.IngressAddr == "" {
+		return nil, nil
+	}
+	names := streamNames(registry)
+	mux := http.NewServeMux()
+
+	var snapshots *snapshot.Cache
+	if cfg.SnapshotBase != "" {
+		token, err := snapshot.LoadOrCreateToken(cfg.SnapshotTokenFile)
+		if err != nil {
+			return nil, err
+		}
+		snapshots, err = snapshot.New(snapshot.Config{
+			Upstream:     cfg.Go2RTCURL,
+			Streams:      names,
+			Token:        token,
+			TrustedCIDRs: cfg.IngressTrustedCIDRs,
+			Logger:       logger.With("component", "snapshot"),
+		})
+		if err != nil {
+			return nil, err
+		}
+		mux.Handle(snapshot.Path, snapshots.Handler())
+	}
+
+	webUI, err := ingress.NewHandler(ingress.Config{
+		Upstream:     cfg.Go2RTCURL,
+		Streams:      names,
+		TrustedCIDRs: cfg.IngressTrustedCIDRs,
+		Logger:       logger.With("component", "ingress"),
+	})
 	if err != nil {
-		return ""
+		if snapshots != nil {
+			snapshots.Close()
+		}
+		return nil, err
 	}
-	parsed.Path = strings.TrimSuffix(parsed.Path, "/") + "/api/frame.jpeg"
-	parsed.RawQuery = url.Values{"src": []string{streamName}}.Encode()
-	return parsed.String()
+	mux.Handle("/", webUI)
+
+	startHTTPServer(ctx, "web UI", cfg.IngressAddr, mux, logger)
+	if snapshots != nil {
+		// go2rtc has to start the relay tunnel, the camera stream and a
+		// transcode before it can produce a still frame. Doing that now means
+		// the first dashboard to ask for a thumbnail does not wait for it.
+		snapshots.Warm()
+	}
+	return snapshots, nil
 }
 
 func monitorGo2RTC(ctx context.Context, client *http.Client, endpoint string, interval time.Duration, state *health.State) {
@@ -374,9 +437,10 @@ func discoveryStreamURL(base, streamName string, legacy bool) (string, error) {
 	return parsed.String(), nil
 }
 
-// startHealthServer runs the JSON health endpoint until ctx is cancelled.
-func startHealthServer(ctx context.Context, addr string, handler http.Handler, logger *slog.Logger) {
-	srv := &http.Server{Addr: addr, Handler: handler}
+// startHTTPServer runs one of the bridge's HTTP listeners until ctx is
+// cancelled.
+func startHTTPServer(ctx context.Context, name, addr string, handler http.Handler, logger *slog.Logger) {
+	srv := &http.Server{Addr: addr, Handler: handler, ReadHeaderTimeout: 10 * time.Second}
 	go func() {
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -384,9 +448,9 @@ func startHealthServer(ctx context.Context, addr string, handler http.Handler, l
 		_ = srv.Shutdown(shutdownCtx)
 	}()
 	go func() {
-		logger.Info("health endpoint listening", "addr", addr)
+		logger.Info(name+" listening", "addr", addr)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			logger.Error("health endpoint failed", "err", err)
+			logger.Error(name+" failed", "err", err)
 		}
 	}()
 }

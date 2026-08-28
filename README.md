@@ -19,7 +19,11 @@ stream alias and `vm65_bridge` add-on slug.
 - optional external-media-server mode;
 - Home Assistant MQTT Discovery: per-camera snapshot, link and temperature
   entities (when supported), plus bridge diagnostics, all retained and reconnect-safe;
-- Home Assistant Ingress for the Web UI, with snapshot images for each camera;
+- Home Assistant Ingress for the Web UI, authenticated against the Home
+  Assistant session the Supervisor identifies, with go2rtc kept on container
+  loopback;
+- cached snapshot images per camera, served by the bridge so a cold camera still
+  produces a picture inside the timeout Home Assistant allows;
 - automatic restart of a failed camera bridge, with exponential backoff;
 - liveness, readiness and sanitized status endpoints with live session counters;
 - graceful shutdown, and credential refresh that does not interrupt live streams;
@@ -37,9 +41,9 @@ validated on real hardware so far.
 3. Set `email`, start once, copy the emailed code into `otp_code`, then start
    again.
 4. Open the add-on Web UI. It is served through Home Assistant Ingress, so it
-   works over any address you already use to reach Home Assistant. The first
-   stream remains `vm65`; additional streams use stable names derived from the
-   camera names.
+   works over any address you already use to reach Home Assistant, and it
+   requires a signed-in Home Assistant user. The first stream remains `vm65`;
+   additional streams use stable names derived from the camera names.
 5. Enable `mqtt_discovery` for the camera, temperature and diagnostic entities; the broker
    settings come from Home Assistant when Mosquitto is installed. Live video is
    added once through the Generic Camera integration — Home Assistant has no
@@ -60,6 +64,9 @@ external mode, port mapping, troubleshooting and upgrades.
 | `internal/fivegencare` | Pairing, sessions, device discovery and secure state |
 | `internal/magic` | Magic WEB2 discovery, relay and tunnel protocol |
 | `internal/mqttdiscovery` | Reliable Home Assistant MQTT Discovery publisher |
+| `internal/ingress` | Authenticated reverse proxy for the Ingress Web UI |
+| `internal/snapshot` | Cached camera still images for Home Assistant |
+| `internal/netguard` | Listener restriction to the Supervisor network |
 | `internal/buildinfo` | Build version reported by both commands and `/status` |
 | `homeassistant/vm65-bridge` | Locally built Home Assistant add-on |
 | `deploy/go2rtc` | Standalone deployment example |
