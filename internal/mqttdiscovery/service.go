@@ -2,12 +2,17 @@
 //
 // Home Assistant's MQTT integration validates every discovery payload against
 // the schema of the component it names, so the component has to match what is
-// actually being published. The MQTT camera platform requires a `topic` it can
-// read image bytes from and has no notion of an RTSP URL, which is why cameras
-// here are published as `image` entities fed by a snapshot URL, plus
-// `binary_sensor` and `sensor` entities for the state worth watching. A live
-// RTSP stream has no MQTT discovery path at all in Home Assistant; the add-on
-// documentation covers adding it once through the camera integration.
+// actually being published. The MQTT camera platform reads image bytes from a
+// `topic` and has no notion of a stream URL — an older payload here carried
+// stream_source and therefore created no entity at all. Feeding that topic is
+// what puts a camera in Home Assistant without anyone adding an integration by
+// hand, so cameras are published as a `camera` entity fed by still frames and
+// an `image` entity fed by a snapshot URL, plus `binary_sensor` and `sensor`
+// entities for the state worth watching.
+//
+// Live video still has no MQTT discovery path in Home Assistant. The add-on's
+// own Web UI plays it, and the documentation covers adding it to a dashboard
+// through the camera integration for anyone who wants it there too.
 package mqttdiscovery
 
 import (
@@ -57,6 +62,11 @@ type Config struct {
 	Version string
 	// ConfigurationURL points at the add-on Web UI, when known.
 	ConfigurationURL string
+	// PublishCameraFrames creates a camera entity per camera, fed by
+	// PublishFrame. Home Assistant then has a real camera without anyone
+	// adding an integration by hand — which is the only way a camera can be
+	// discovered over MQTT, since the platform has no notion of a stream URL.
+	PublishCameraFrames bool
 }
 
 type Camera struct {
@@ -251,6 +261,26 @@ func (s *Service) SetCameraAvailable(ctx context.Context, id string, available b
 	return s.client.Publish(ctx, s.cameraTopic(id, "availability"), true, []byte(availabilityPayload(available)))
 }
 
+// PublishFrame feeds one camera entity a still frame. Frames are retained so a
+// Home Assistant restart shows the last picture immediately instead of an empty
+// tile until the next refresh.
+func (s *Service) PublishFrame(ctx context.Context, id string, jpeg []byte) error {
+	if len(jpeg) < 2 || jpeg[0] != 0xFF || jpeg[1] != 0xD8 {
+		return errors.New("mqtt camera frame must be a JPEG")
+	}
+	s.mu.RLock()
+	_, known := s.cameras[id]
+	connected := s.connected
+	s.mu.RUnlock()
+	if !known {
+		return errors.New("mqtt camera is not registered")
+	}
+	if !connected || !s.config.PublishCameraFrames {
+		return nil
+	}
+	return s.client.Publish(ctx, s.cameraTopic(id, "image"), true, jpeg)
+}
+
 // PublishStatus mirrors the runtime counters into the diagnostic entities.
 func (s *Service) PublishStatus(ctx context.Context, status Status) error {
 	s.mu.Lock()
@@ -279,8 +309,10 @@ func (s *Service) Remove(ctx context.Context, id string) error {
 	var errs []error
 	for _, topic := range []string{
 		s.discoveryTopic("image", object),
+		s.discoveryTopic("camera", object),
 		s.discoveryTopic("binary_sensor", object+"_link"),
 		s.discoveryTopic("sensor", object+"_temperature"),
+		s.cameraTopic(id, "image"),
 		s.cameraTopic(id, "temperature"),
 		s.cameraTopic(id, "temperature_availability"),
 	} {
@@ -425,11 +457,28 @@ func (s *Service) publishCamera(ctx context.Context, camera Camera) error {
 		errs = append(errs, s.client.Publish(ctx, s.discoveryTopic("image", object), true, nil))
 	}
 
-	// Older versions published a `camera` discovery payload carrying
-	// stream_source. Home Assistant rejects it: the MQTT camera platform
-	// requires an image `topic` and has no stream_source key, so no entity was
-	// ever created. Clear the retained payload so brokers stop replaying it.
-	errs = append(errs, s.client.Publish(ctx, s.discoveryTopic("camera", object), true, nil))
+	// A `camera` entity is what puts the camera in Home Assistant without
+	// anyone adding an integration by hand. The platform reads image bytes
+	// from a topic — it has no stream_source key, which is why an older
+	// payload carrying one created no entity at all — so it exists only while
+	// frames are being published to it.
+	if s.config.PublishCameraFrames {
+		camera := entity{
+			Name:             "Camera",
+			UniqueID:         camera.ID + "_camera",
+			Topic:            s.cameraTopic(camera.ID, "image"),
+			Availability:     s.cameraAvailability(camera.ID),
+			AvailabilityMode: "all",
+			Icon:             "mdi:cctv",
+			Device:           device,
+		}
+		errs = append(errs, s.publishEntity(ctx, "camera", object, camera))
+	} else {
+		errs = append(errs,
+			s.client.Publish(ctx, s.discoveryTopic("camera", object), true, nil),
+			s.client.Publish(ctx, s.cameraTopic(camera.ID, "image"), true, nil),
+		)
+	}
 	errs = append(errs, s.publishTemperatureEntity(ctx, camera, temperatureSupported, temperatureAvailable))
 
 	return errors.Join(errs...)
@@ -543,6 +592,7 @@ type entity struct {
 	UniqueID         string         `json:"unique_id"`
 	StateTopic       string         `json:"state_topic,omitempty"`
 	URLTopic         string         `json:"url_topic,omitempty"`
+	Topic            string         `json:"topic,omitempty"`
 	DeviceClass      string         `json:"device_class,omitempty"`
 	StateClass       string         `json:"state_class,omitempty"`
 	UnitOfMeasure    string         `json:"unit_of_measurement,omitempty"`
