@@ -64,6 +64,7 @@ external mode, port mapping, troubleshooting and upgrades.
 | `homeassistant/vm65-bridge` | Locally built Home Assistant add-on |
 | `deploy/go2rtc` | Standalone deployment example |
 | `docs` | Architecture, operations, security and release documentation |
+| `CHANGELOG.md` | What changed in each release |
 | `research` | Historical captures, analysis notes and research-only tooling |
 
 The repository name, binary names and add-on slug retain `vm65` for upgrade
