@@ -75,14 +75,25 @@ func (f *fakeBrokerClient) config(t *testing.T, topic string) map[string]any {
 
 func newTestService(t *testing.T) (*Service, *fakeBrokerClient) {
 	t.Helper()
+	return newConfiguredService(t, nil)
+}
+
+// newConfiguredService builds a service with one setting adjusted, so a test
+// about camera frames does not need its own copy of the base configuration.
+func newConfiguredService(t *testing.T, adjust func(*Config)) (*Service, *fakeBrokerClient) {
+	t.Helper()
 	fake := &fakeBrokerClient{}
-	service := newService(Config{
+	config := Config{
 		Host:             "broker",
 		Port:             1883,
 		DiscoveryPrefix:  "homeassistant",
 		Version:          "v9.9.9",
 		ConfigurationURL: "http://homeassistant.local:1984",
-	}, func(clientConfig) brokerClient { return fake })
+	}
+	if adjust != nil {
+		adjust(&config)
+	}
+	service := newService(config, func(clientConfig) brokerClient { return fake })
 	if err := service.Start(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -349,5 +360,91 @@ func TestUpsertRejectsMalformedURLs(t *testing.T) {
 	camera.SnapshotURL = "rtsp://not-http/frame"
 	if err := service.Upsert(context.Background(), camera); err == nil {
 		t.Fatal("a non-HTTP snapshot URL was accepted")
+	}
+}
+
+// A camera entity is the only path by which Home Assistant discovers a camera
+// at all, so the payload has to be one the camera platform accepts: image bytes
+// on a topic, never a stream URL.
+func TestCameraEntityIsPublishedWithATopicAndFedFrames(t *testing.T) {
+	service, fake := newConfiguredService(t, func(config *Config) { config.PublishCameraFrames = true })
+	if err := service.Upsert(context.Background(), bundledCamera()); err != nil {
+		t.Fatal(err)
+	}
+
+	payload := fake.config(t, "homeassistant/camera/camera-a/config")
+	if payload["topic"] != "motorola-nursery-bridge/camera/camera-a/image" {
+		t.Fatalf("camera topic = %#v", payload["topic"])
+	}
+	if payload["unique_id"] != "camera-a_camera" {
+		t.Fatalf("unique_id = %#v", payload["unique_id"])
+	}
+	for _, rejected := range []string{"stream_source", "url_topic", "state_topic"} {
+		if _, present := payload[rejected]; present {
+			t.Fatalf("camera payload carries %q, which the camera platform does not accept", rejected)
+		}
+	}
+
+	jpeg := []byte{0xFF, 0xD8, 0x01, 0x02}
+	if err := service.PublishFrame(context.Background(), "camera-a", jpeg); err != nil {
+		t.Fatalf("PublishFrame: %v", err)
+	}
+	frame, ok := fake.last("motorola-nursery-bridge/camera/camera-a/image")
+	if !ok || string(frame) != string(jpeg) {
+		t.Fatalf("frame = %q", frame)
+	}
+}
+
+// With frames off there is nothing to feed the entity, so it must not exist.
+func TestFramesOffRetiresTheCameraEntity(t *testing.T) {
+	service, fake := newTestService(t)
+	if err := service.Upsert(context.Background(), bundledCamera()); err != nil {
+		t.Fatal(err)
+	}
+	payload, ok := fake.last("homeassistant/camera/camera-a/config")
+	if !ok || len(payload) != 0 {
+		t.Fatalf("camera config = %q, want the retained payload cleared", payload)
+	}
+	if err := service.PublishFrame(context.Background(), "camera-a", []byte{0xFF, 0xD8}); err != nil {
+		t.Fatalf("PublishFrame: %v", err)
+	}
+	if frame, published := fake.last("motorola-nursery-bridge/camera/camera-a/image"); published && len(frame) != 0 {
+		t.Fatalf("image topic = %q, want nothing published with frames off", frame)
+	}
+}
+
+func TestOnlyJPEGFramesFromRegisteredCamerasArePublished(t *testing.T) {
+	service, _ := newConfiguredService(t, func(config *Config) { config.PublishCameraFrames = true })
+	if err := service.Upsert(context.Background(), bundledCamera()); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.PublishFrame(context.Background(), "camera-a", []byte("<html>not an image")); err == nil {
+		t.Fatal("expected a non-JPEG frame to be refused")
+	}
+	if err := service.PublishFrame(context.Background(), "unknown", []byte{0xFF, 0xD8}); err == nil {
+		t.Fatal("expected an unregistered camera to be refused")
+	}
+}
+
+// A camera that left the registry must not leave a retained frame behind.
+func TestRemoveRetiresTheCameraEntityAndItsFrame(t *testing.T) {
+	service, fake := newConfiguredService(t, func(config *Config) { config.PublishCameraFrames = true })
+	if err := service.Upsert(context.Background(), bundledCamera()); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.PublishFrame(context.Background(), "camera-a", []byte{0xFF, 0xD8}); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Remove(context.Background(), "camera-a"); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+	for _, topic := range []string{
+		"homeassistant/camera/camera-a/config",
+		"motorola-nursery-bridge/camera/camera-a/image",
+	} {
+		payload, ok := fake.last(topic)
+		if !ok || len(payload) != 0 {
+			t.Fatalf("%s = %q, want it cleared", topic, payload)
+		}
 	}
 }

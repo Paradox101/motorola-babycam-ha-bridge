@@ -19,6 +19,10 @@ type fakeServer struct {
 
 	startedOnce sync.Once
 	started     chan struct{}
+	closedOnce  sync.Once
+	// stopped models a closed listener: the real server's Serve returns as
+	// soon as its socket is closed, which is what a restart relies on.
+	stopped chan struct{}
 
 	mu     sync.Mutex
 	closed bool
@@ -28,7 +32,10 @@ type fakeServer struct {
 }
 
 func newFakeServer(listenAddr string, serveErr error) *fakeServer {
-	return &fakeServer{listenAddr: listenAddr, serveErr: serveErr, started: make(chan struct{})}
+	return &fakeServer{
+		listenAddr: listenAddr, serveErr: serveErr,
+		started: make(chan struct{}), stopped: make(chan struct{}),
+	}
 }
 
 func (s *fakeServer) Listen() error { return nil }
@@ -38,14 +45,18 @@ func (s *fakeServer) Serve(ctx context.Context) error {
 	if s.serveErr != nil {
 		return s.serveErr
 	}
-	<-ctx.Done()
+	select {
+	case <-ctx.Done():
+	case <-s.stopped:
+	}
 	return nil
 }
 
 func (s *fakeServer) Close() error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.closed = true
+	s.mu.Unlock()
+	s.closedOnce.Do(func() { close(s.stopped) })
 	return nil
 }
 
@@ -295,5 +306,51 @@ func TestReloadRejectsAnEmptyRegistry(t *testing.T) {
 	}
 	if ready := state.Snapshot().BridgesReady; ready != 2 {
 		t.Fatalf("bridges ready after a rejected reload = %d, want 2", ready)
+	}
+}
+
+// The Web UI reads this to render each camera and to say which one is down.
+func TestCamerasReportLiveStateAndRestartOnDemand(t *testing.T) {
+	registry := Registry{Cameras: []Camera{{
+		Credentials: bridge.Credentials{DeviceUDID: "a", DeviceName: "Ada", Model: "VM65CONNECT"},
+		StreamName:  "ada",
+		ListenAddr:  "127.0.0.1:0",
+	}}}
+	factory := &fakeFactory{}
+	runtime := New(RuntimeConfig{
+		Registry:       registry,
+		NewServer:      factory.new,
+		RestartBackoff: time.Millisecond,
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- runtime.Run(ctx) }()
+
+	waitFor(t, "the camera to serve", func() bool {
+		cameras := runtime.Cameras()
+		return len(cameras) == 1 && cameras[0].Serving
+	})
+	state := runtime.Cameras()[0]
+	if state.ID != "a" || state.Name != "Ada" || state.Model != "VM65CONNECT" || state.StreamName != "ada" {
+		t.Fatalf("state = %#v", state)
+	}
+
+	// Restarting one camera drops its server; the supervisor rebuilds it.
+	if err := runtime.RestartCamera("a"); err != nil {
+		t.Fatalf("RestartCamera: %v", err)
+	}
+	waitFor(t, "the camera to come back", func() bool {
+		cameras := runtime.Cameras()
+		return runtime.Reconnects() >= 1 && len(cameras) == 1 && cameras[0].Serving
+	})
+
+	if err := runtime.RestartCamera("missing"); err == nil {
+		t.Fatal("expected an unknown camera to be refused")
+	}
+
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("Run: %v", err)
 	}
 }

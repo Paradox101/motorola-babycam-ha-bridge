@@ -19,11 +19,14 @@ stream alias and `vm65_bridge` add-on slug.
 - one isolated Magic WEB2 bridge per camera;
 - optional bundled go2rtc with RTSP, WebRTC, MSE and snapshots;
 - optional external-media-server mode;
-- Home Assistant MQTT Discovery: per-camera snapshot, link and temperature
-  entities (when supported), plus bridge diagnostics, all retained and reconnect-safe;
-- Home Assistant Ingress for the Web UI, authenticated against the Home
-  Assistant session the Supervisor identifies, with go2rtc kept on container
-  loopback;
+- Home Assistant MQTT Discovery: a camera entity per camera, so cameras appear
+  without adding an integration by hand, plus snapshot, link and temperature
+  entities (when supported) and bridge diagnostics, all retained and
+  reconnect-safe;
+- the add-on's own Web UI over Home Assistant Ingress — live WebRTC video, link
+  and temperature state and a per-camera restart — authenticated against the
+  Home Assistant session the Supervisor identifies, with go2rtc kept on
+  container loopback;
 - cached snapshot images per camera, served by the bridge so a cold camera still
   produces a picture inside the timeout Home Assistant allows;
 - automatic restart of a failed camera bridge, with exponential backoff;
@@ -68,6 +71,7 @@ external mode, port mapping, troubleshooting and upgrades.
 | `internal/mqttdiscovery` | Reliable Home Assistant MQTT Discovery publisher |
 | `internal/ingress` | Authenticated reverse proxy for the Ingress Web UI |
 | `internal/pairing` | Account pairing page served behind Ingress |
+| `internal/webui` | Camera view and per-camera actions behind Ingress |
 | `internal/snapshot` | Cached camera still images for Home Assistant |
 | `internal/netguard` | Listener restriction to the Supervisor network |
 | `internal/buildinfo` | Build version reported by both commands and `/status` |
