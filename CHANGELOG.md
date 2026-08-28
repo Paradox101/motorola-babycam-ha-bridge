@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.5.0
+
+### Added
+
+- Home Assistant MQTT temperature sensors for compatible Motorola Nursery
+  cameras. The bridge reads the camera's `temperature_reading` capability over
+  Motorola's authenticated TLS control channel and publishes Celsius values
+  with dedicated availability tracking.
+- Add-on option `temperature_poll_interval`, in seconds, with a default of 30
+  and supported range of 10 through 3600 seconds.
+
 ## 0.4.0
 
 Bug-fix release from a full review of the 0.3.0 tree. Existing add-on options
