@@ -6,8 +6,9 @@ does not publish add-on runtime images.
 
 ## Release checklist
 
-1. Choose `X.Y.Z` and update `version` in
-   `homeassistant/vm65-bridge/config.yaml`.
+1. Choose `X.Y.Z`, update `version` in
+   `homeassistant/vm65-bridge/config.yaml` and add the section to
+   `CHANGELOG.md`.
 2. Set `ARG SOURCE_REF=vX.Y.Z` in the add-on Dockerfile.
 3. Update user-facing documentation and run the complete verification suite.
 4. Commit the release state.
