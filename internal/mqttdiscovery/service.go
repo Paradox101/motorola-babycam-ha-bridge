@@ -31,6 +31,9 @@ type Camera struct {
 	Name      string
 	Model     string
 	StreamURL string
+	// StillImageURL gives Home Assistant a snapshot source, so the camera entity
+	// has a thumbnail and automations can grab a frame. Optional.
+	StillImageURL string
 }
 
 type clientConfig struct {
@@ -162,6 +165,7 @@ func (s *Service) publishCamera(ctx context.Context, camera Camera) error {
 		PayloadAvailable    string `json:"payload_available"`
 		PayloadNotAvailable string `json:"payload_not_available"`
 		StreamSource        string `json:"stream_source"`
+		StillImageURL       string `json:"still_image_url,omitempty"`
 		Device              struct {
 			Identifiers  []string `json:"identifiers"`
 			Name         string   `json:"name"`
@@ -175,6 +179,7 @@ func (s *Service) publishCamera(ctx context.Context, camera Camera) error {
 		PayloadAvailable:    "online",
 		PayloadNotAvailable: "offline",
 		StreamSource:        camera.StreamURL,
+		StillImageURL:       camera.StillImageURL,
 	}
 	payload.Device.Identifiers = []string{camera.ID}
 	payload.Device.Name = camera.Name
