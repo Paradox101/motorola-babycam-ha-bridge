@@ -1,0 +1,89 @@
+configuration:
+  email:
+    name: Account email
+    description: >-
+      Motorola Nursery account address. Optional: the Web UI asks for it during
+      pairing and does not store it here.
+  otp_code:
+    name: Pairing code
+    description: >-
+      Legacy unattended pairing code. Leave empty and pair from the Web UI; a
+      code entered there is never written to this configuration.
+  control_host:
+    name: Relay control host
+    description: Magic relay control host. Change only if support tells you to.
+  stream_backend:
+    name: Streaming mode
+    description: >-
+      "bundled" runs the built-in media server and plays live video in the Web
+      UI. "external" keeps only the RTSP republisher for an existing media
+      server.
+  mqtt_discovery:
+    name: Publish to Home Assistant over MQTT
+    description: >-
+      Creates a device per camera with a snapshot, a link sensor and, where the
+      camera supports it, temperature. Uses the Mosquitto add-on automatically
+      when it is installed.
+  mqtt_host:
+    name: MQTT broker host
+    description: Leave as is to use the broker Home Assistant provides.
+  mqtt_port:
+    name: MQTT broker port
+    description: Leave as is to use the broker Home Assistant provides.
+  mqtt_tls:
+    name: Connect to the broker over TLS
+    description: >-
+      Detected automatically for the broker Home Assistant provides. Set it by
+      hand for an external broker that only accepts TLS, normally on port 8883.
+  mqtt_username:
+    name: MQTT username
+    description: Leave empty to use the credentials Home Assistant provides.
+  mqtt_password:
+    name: MQTT password
+    description: Leave empty to use the credentials Home Assistant provides.
+  mqtt_discovery_prefix:
+    name: MQTT discovery prefix
+    description: Normally "homeassistant". Change it only if your broker uses another prefix.
+  temperature_poll_interval:
+    name: Temperature interval (seconds)
+    description: How often a supported camera is asked for its ambient temperature.
+  camera_refresh_interval:
+    name: Camera image interval (seconds)
+    description: >-
+      How often a still frame is pushed to the Home Assistant camera entity.
+      Every refresh pulls a frame over the relay, so a short interval is a
+      standing cost on the connection. Zero publishes none and creates no
+      camera entity.
+  stream_host:
+    name: Stream host
+    description: >-
+      The address players and browsers use to reach this machine for RTSP and
+      WebRTC. It must resolve from those devices; the default relies on mDNS,
+      which does not work everywhere. Snapshots do not use it.
+  rtsp_port:
+    name: RTSP host port
+    description: >-
+      The host port container port 8555 is mapped to in the Network section.
+      This is the port in the RTSP URL Home Assistant is told to use.
+  webrtc_port:
+    name: WebRTC host port
+    description: >-
+      The host port container port 8556 is mapped to in the Network section.
+      This is the address browsers are told to connect to for WebRTC media.
+  external_stream_port:
+    name: Legacy stream port (deprecated)
+    description: >-
+      Superseded by the RTSP and WebRTC host ports. Zero means unused; any other
+      value still wins, so existing configurations keep working.
+  shutdown_timeout:
+    name: Shutdown timeout (seconds)
+    description: How long child processes get to stop before they are forced.
+  credential_refresh_interval:
+    name: Credential refresh interval (seconds)
+    description: >-
+      How often the account session and camera credentials are refreshed.
+      Cameras whose credentials did not change keep streaming.
+network:
+  8555/tcp: RTSP republish of every camera
+  8556/tcp: WebRTC media (TCP)
+  8556/udp: WebRTC media (UDP)

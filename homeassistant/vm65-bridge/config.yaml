@@ -1,14 +1,23 @@
 name: Motorola Nursery Bridge
-version: "0.9.2"
+version: "0.10.0"
 slug: vm65_bridge
 description: Publishes compatible Motorola Nursery cameras through Magic WEB2 and optional go2rtc.
 url: https://github.com/Paradox101/motorola-babycam-ha-bridge
 arch:
+  # 32-bit targets are deliberately absent: Home Assistant publishes no base
+  # image newer than Alpine 3.22 for armv7 or armhf, so offering those would
+  # pin the whole add-on — ffmpeg included — to a base that no longer gets
+  # security updates.
   - amd64
   - aarch64
+# The MQTT image entity this add-on publishes reads its URL from a topic, which
+# Home Assistant's MQTT integration has supported since 2023.7.
+homeassistant: "2023.7.0"
 init: false
 startup: application
-boot: manual
+# A nursery camera bridge that does not come back after a Home Assistant
+# restart is a bridge nobody notices is gone until they need it.
+boot: auto
 # The Web UI is served through Home Assistant Ingress. A webui: link built from
 # [HOST]:[PORT:1984] only resolves on the local network over plain http, so it
 # breaks for anyone reaching Home Assistant through a domain name, a reverse
@@ -23,6 +32,12 @@ boot: manual
 # loopback.
 ingress: true
 ingress_port: 8099
+# The Web UI serves two responses that never end: the MJPEG fallback transport
+# and progressive fMP4. The Supervisor buffers an ingress response unless this
+# is set, which would hold both open forever and deliver nothing — and MJPEG is
+# exactly the transport that matters when the page is reached through Nabu Casa
+# or a reverse proxy, where WebRTC media cannot arrive at all.
+ingress_stream: true
 panel_icon: mdi:baby-face-outline
 # Only administrators see the sidebar panel.
 panel_admin: true
@@ -56,13 +71,21 @@ options:
   mqtt_discovery: false
   mqtt_host: core-mosquitto
   mqtt_port: 1883
+  mqtt_tls: false
   mqtt_username: ""
   mqtt_password: ""
   mqtt_discovery_prefix: homeassistant
   temperature_poll_interval: 30
   camera_refresh_interval: 60
   stream_host: homeassistant.local
-  external_stream_port: 8556
+  # The host ports the two media services are reachable on. They default to the
+  # container ports below, which is what the Network section maps them to unless
+  # someone changes it; change these to match whenever that mapping changes,
+  # because these are the numbers that end up in the RTSP URL Home Assistant is
+  # told to use and in the WebRTC candidate the browser is told to connect to.
+  rtsp_port: 8555
+  webrtc_port: 8556
+  external_stream_port: 0
   shutdown_timeout: 10
   credential_refresh_interval: 21600
 schema:
@@ -73,12 +96,15 @@ schema:
   mqtt_discovery: bool
   mqtt_host: str
   mqtt_port: port
+  mqtt_tls: bool
   mqtt_username: str
   mqtt_password: password
   mqtt_discovery_prefix: str
   temperature_poll_interval: int(10,3600)
   camera_refresh_interval: int(0,3600)
   stream_host: str
-  external_stream_port: port
+  rtsp_port: port
+  webrtc_port: port
+  external_stream_port: int(0,65535)
   shutdown_timeout: int(1,120)
   credential_refresh_interval: int(300,86400)

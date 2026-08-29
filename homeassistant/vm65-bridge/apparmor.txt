@@ -4,20 +4,39 @@
 # Supervisor loads this file automatically and renames the profile to the
 # add-on slug, so the name below must stay in step with `slug:` in config.yaml.
 #
-# It follows the shape of the profile Home Assistant documents: the add-on
-# needs no capabilities beyond running its own processes, so the profile grants
-# file and network access and denies everything else — mounts, raw capabilities
-# and ptrace included. Keep it permissive enough to start: a profile that
-# blocks the entrypoint takes the cameras offline, which is a worse failure
-# than the one it prevents.
+# It follows the shape of the profile Home Assistant documents, with one change:
+# the blanket `file,` rule is gone. That rule allowed every path in the
+# container to be read, written and executed, which made the profile read as
+# protection while granting all of it.
+#
+# What replaces it is deliberately asymmetric. Reading stays broad — a read of
+# some file in the image is not the failure worth preventing, and narrowing it
+# is how a profile ends up blocking the entrypoint and taking the cameras
+# offline, which is worse than what it prevents. Writing and executing are
+# named: the add-on writes to its own data directory and the scratch paths the
+# runtime needs, and executes its own three binaries plus the shell and s6
+# tooling that start them. `network` stays unqualified — the whole add-on is a
+# network bridge, and it speaks TCP and UDP to the relay, the broker and the
+# LAN.
+#
+# When something legitimate is blocked, add the path rather than restoring the
+# blanket rule.
 #include <tunables/global>
 
 profile vm65_bridge flags=(attach_disconnected,mediate_deleted) {
   #include <abstractions/base>
 
-  file,
   network,
-  signal (send) set=(kill,term,int,hup,cont),
+  # The bridge asks the entrypoint for a credential refresh with SIGUSR1; the
+  # entrypoint signals its own children to stop or reload.
+  signal (send) set=(kill,term,int,hup,cont,usr1),
+  signal (receive) set=(term,int,hup,usr1),
+
+  # Reading the image and the kernel interfaces the runtime needs. ffmpeg reads
+  # the CPU topology to size its thread pool.
+  /** r,
+  /usr/lib/** mr,
+  /lib/** mr,
 
   # S6-Overlay
   /init ix,
@@ -32,6 +51,7 @@ profile vm65_bridge flags=(attach_disconnected,mediate_deleted) {
   /etc/cont-finish.d/** rwix,
   /run/{,**} rwk,
   /dev/tty rw,
+  /dev/null rw,
 
   # Bashio
   /usr/lib/bashio/** ix,
@@ -45,6 +65,14 @@ profile vm65_bridge flags=(attach_disconnected,mediate_deleted) {
   /usr/local/bin/go2rtc ix,
 
   # Pairing state, camera credentials, the generated go2rtc configuration and
-  # the snapshot token.
-  /data/** rw,
+  # the snapshot token. This is the only place the add-on keeps anything.
+  /data/ rw,
+  /data/** rwk,
+
+  # The image itself is read-only at runtime. A write here is either a mistake
+  # or an escape; nothing the add-on does needs one.
+  deny /usr/local/bin/** w,
+  deny /bin/** w,
+  deny /sbin/** w,
+  deny /lib/** w,
 }

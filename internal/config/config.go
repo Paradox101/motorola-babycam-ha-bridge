@@ -20,6 +20,11 @@ type MQTT struct {
 	Username        string
 	Password        string
 	DiscoveryPrefix string
+	// TLS dials the broker over TLS. Home Assistant's own broker service can
+	// report a TLS listener (normally port 8883), and a plain TCP dial against
+	// one connects and then never completes a handshake, which reaches the user
+	// as entities that simply never appear.
+	TLS bool
 }
 
 // Config is the validated long-running bridge configuration.
@@ -28,7 +33,9 @@ type MQTT struct {
 // process, not go2rtc: the bridge serves the still images itself so a cold
 // camera cannot blow the ten-second budget Home Assistant allows an image
 // entity. IngressAddr is where that endpoint, and the authenticated Web UI,
-// listen.
+// listen. SnapshotBase therefore only decides whether an address is published
+// over MQTT — the still images themselves are served whenever there is an
+// ingress listener, because the Web UI shows them too.
 type Config struct {
 	ListenAddr              string
 	CredentialsPath         string
@@ -50,6 +57,14 @@ type Config struct {
 	// created: Home Assistant's camera platform has nothing to show without
 	// them.
 	CameraRefreshInterval time.Duration
+	// AllowCredentialRefresh offers the Web UI's "refresh credentials" action.
+	// The refresh itself belongs to the add-on's entrypoint, which owns the
+	// account session, so the bridge only signals it; outside the add-on there
+	// is nothing to signal and the action is not offered.
+	AllowCredentialRefresh bool
+	// AllowMediaRestart offers the Web UI's "restart media server" action,
+	// which asks the bundled go2rtc to restart itself.
+	AllowMediaRestart bool
 }
 
 // Load parses command-line arguments, applies secret environment overrides,
@@ -70,6 +85,7 @@ func Load(args []string, lookupEnv func(string) (string, bool)) (Config, error) 
 	flags.IntVar(&cfg.MQTT.Port, "mqtt-port", 1883, "MQTT broker port")
 	flags.StringVar(&cfg.MQTT.Username, "mqtt-username", "", "MQTT username")
 	flags.StringVar(&legacyMQTTPassword, "mqtt-password", "", "deprecated: use VM65_MQTT_PASSWORD")
+	flags.BoolVar(&cfg.MQTT.TLS, "mqtt-tls", false, "connect to the MQTT broker over TLS")
 	flags.StringVar(&cfg.MQTT.DiscoveryPrefix, "mqtt-discovery-prefix", "homeassistant", "MQTT discovery prefix")
 	flags.StringVar(&cfg.StreamURL, "stream-url", "", "RTSP URL for MQTT discovery")
 	flags.StringVar(&cfg.SnapshotBase, "snapshot-url-base", "", "public base URL of this bridge, used to build the MQTT snapshot image URL, e.g. http://local-vm65-bridge:8099")
@@ -82,6 +98,8 @@ func Load(args []string, lookupEnv func(string) (string, bool)) (Config, error) 
 	flags.DurationVar(&cfg.ShutdownTimeout, "shutdown-timeout", 10*time.Second, "graceful shutdown timeout")
 	flags.DurationVar(&cfg.TemperaturePollInterval, "temperature-poll-interval", 30*time.Second, "temperature polling interval when MQTT discovery is enabled")
 	flags.DurationVar(&cfg.CameraRefreshInterval, "camera-refresh-interval", 0, "how often to push a still frame to the Home Assistant camera entity; zero publishes none")
+	flags.BoolVar(&cfg.AllowCredentialRefresh, "allow-credential-refresh", false, "offer the Web UI action that asks the supervising entrypoint for a credential refresh")
+	flags.BoolVar(&cfg.AllowMediaRestart, "allow-media-restart", false, "offer the Web UI action that restarts the bundled media server")
 	if err := flags.Parse(args); err != nil {
 		return Config{}, fmt.Errorf("parse configuration: %w", err)
 	}
@@ -134,6 +152,20 @@ func (c Config) Validate() error {
 			return errors.New("go2rtc URL must be an absolute http or https URL when required")
 		}
 	}
+	// The snapshot base is checked outside the MQTT block: a base URL that is
+	// wrong is worth reporting whether or not a broker is configured, and the
+	// still images are served either way.
+	if c.SnapshotBase != "" {
+		snapshot, err := url.Parse(c.SnapshotBase)
+		if err != nil || (snapshot.Scheme != "http" && snapshot.Scheme != "https") || snapshot.Host == "" {
+			return errors.New("snapshot URL base must be an absolute http or https URL")
+		}
+		// The bridge serves the snapshots, so advertising a URL without
+		// starting that listener would publish an address nothing answers on.
+		if c.IngressAddr == "" {
+			return errors.New("snapshot URL base requires an ingress listen address")
+		}
+	}
 	if c.MQTT.Host == "" {
 		return nil
 	}
@@ -147,18 +179,22 @@ func (c Config) Validate() error {
 	if err != nil || parsed.Scheme != "rtsp" || parsed.Host == "" || parsed.Path == "" {
 		return errors.New("mqtt stream URL must be an absolute rtsp URL")
 	}
-	if c.SnapshotBase != "" {
-		snapshot, err := url.Parse(c.SnapshotBase)
-		if err != nil || (snapshot.Scheme != "http" && snapshot.Scheme != "https") || snapshot.Host == "" {
-			return errors.New("snapshot URL base must be an absolute http or https URL")
-		}
-		// The bridge serves the snapshots, so advertising a URL without
-		// starting that listener would publish an address nothing answers on.
-		if c.IngressAddr == "" {
-			return errors.New("snapshot URL base requires an ingress listen address")
-		}
-	}
 	return nil
+}
+
+// StreamHost is the host part of the advertised RTSP URL: the address a browser
+// or Home Assistant has to be able to reach. It is the value behind the most
+// common failure this add-on has — a name that resolves nowhere useful — so the
+// Web UI shows it.
+func (c Config) StreamHost() string {
+	if c.StreamURL == "" {
+		return ""
+	}
+	parsed, err := url.Parse(c.StreamURL)
+	if err != nil {
+		return ""
+	}
+	return parsed.Hostname()
 }
 
 // parseTrustedCIDRs turns the flag value into the network list. An empty value
@@ -197,13 +233,14 @@ func validateAddress(name, address string) error {
 // Redacted returns a log-safe configuration summary.
 func (c Config) Redacted() string {
 	return fmt.Sprintf(
-		"listen=%q status=%q credentials=%q registry=%q mqtt_host=%q mqtt_port=%d mqtt_user_set=%t mqtt_password_set=%t stream_url=%q snapshot_base=%q ingress=%q go2rtc_required=%t go2rtc_url=%q shutdown_timeout=%s temperature_poll_interval=%s camera_refresh_interval=%s",
+		"listen=%q status=%q credentials=%q registry=%q mqtt_host=%q mqtt_port=%d mqtt_tls=%t mqtt_user_set=%t mqtt_password_set=%t stream_url=%q snapshot_base=%q ingress=%q go2rtc_required=%t go2rtc_url=%q shutdown_timeout=%s temperature_poll_interval=%s camera_refresh_interval=%s",
 		c.ListenAddr,
 		c.StatusAddr,
 		c.CredentialsPath,
 		c.RegistryPath,
 		c.MQTT.Host,
 		c.MQTT.Port,
+		c.MQTT.TLS,
 		c.MQTT.Username != "",
 		c.MQTT.Password != "",
 		c.StreamURL,

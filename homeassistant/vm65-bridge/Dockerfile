@@ -27,14 +27,23 @@ RUN git clone --depth 1 --branch "${SOURCE_REF}" \
         exit 1; \
     }
 WORKDIR /src
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" \
-    -o /out/vm65-bridge ./cmd/vm65-bridge && \
-    CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" \
-    -o /out/vm65-setup ./cmd/vm65-setup
+# The version comes from the add-on manifest copied above. Without it the build
+# falls back to the VCS stamp of a shallow clone and every log line, MQTT device
+# and bug report says "devel+<sha>" while the add-on page says 0.10.0.
+RUN set -eu; \
+    version="$(sed -n 's/^version:[[:space:]]*"\{0,1\}\([^"[:space:]]*\)"\{0,1\}[[:space:]]*$/\1/p' /tmp/vm65-addon-config.yaml)"; \
+    if [ -z "${version}" ]; then echo "ERROR: no version in the add-on config"; exit 1; fi; \
+    ldflags="-s -w -X github.com/local/motorola-vm65-bridge/internal/buildinfo.Version=${version}"; \
+    CGO_ENABLED=0 go build -trimpath -ldflags="${ldflags}" -o /out/vm65-bridge ./cmd/vm65-bridge; \
+    CGO_ENABLED=0 go build -trimpath -ldflags="${ldflags}" -o /out/vm65-setup ./cmd/vm65-setup
 
 FROM alexxit/go2rtc:1.9.14 AS go2rtc
 
-FROM ghcr.io/home-assistant/${BUILD_ARCH}-base:3.19
+# Pinned to a dated base tag: 3.19 is end of life, and the ffmpeg installed on
+# top of it is the component that parses camera data. Only 64-bit bases are
+# used — Home Assistant publishes nothing newer than Alpine 3.22 for armv7 —
+# which is why config.yaml offers amd64 and aarch64 only.
+FROM ghcr.io/home-assistant/${BUILD_ARCH}-base:3.24-2026.08.0
 # go2rtc needs ffmpeg to turn an H264 keyframe into a JPEG. Without it every
 # still-image request fails, which reaches Home Assistant as a 500 from its
 # image proxy and leaves the snapshot entity permanently broken. The official

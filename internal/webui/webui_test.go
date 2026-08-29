@@ -15,10 +15,14 @@ import (
 )
 
 type fakeSource struct {
-	mu        sync.Mutex
-	overview  Overview
-	restarted []string
-	restartEr error
+	mu           sync.Mutex
+	overview     Overview
+	restarted    []string
+	restartEr    error
+	mediaCalls   int
+	mediaEr      error
+	refreshCalls int
+	refreshEr    error
 }
 
 func (f *fakeSource) Overview() Overview {
@@ -32,6 +36,20 @@ func (f *fakeSource) Restart(id string) error {
 	defer f.mu.Unlock()
 	f.restarted = append(f.restarted, id)
 	return f.restartEr
+}
+
+func (f *fakeSource) RestartMedia() error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.mediaCalls++
+	return f.mediaEr
+}
+
+func (f *fakeSource) RefreshCredentials() error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.refreshCalls++
+	return f.refreshEr
 }
 
 func twoCameras() Overview {
@@ -261,5 +279,79 @@ func TestThePageStopsPlayingWhenHidden(t *testing.T) {
 	body := do(handler, http.MethodGet, "/", "", true).Body.String()
 	if !strings.Contains(body, "visibilitychange") {
 		t.Fatal("the page keeps streaming into a hidden tab")
+	}
+}
+
+func TestTheMediaRestartActionReachesTheSource(t *testing.T) {
+	source := &fakeSource{overview: twoCameras()}
+	handler := newServer(t, source, nil, nil)
+	recorder := do(handler, http.MethodPost, "/api/media/restart", "{}", true)
+	if recorder.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want %d (%s)", recorder.Code, http.StatusAccepted, recorder.Body)
+	}
+	if source.mediaCalls != 1 {
+		t.Fatalf("media restarts = %d, want 1", source.mediaCalls)
+	}
+}
+
+func TestTheCredentialRefreshActionReachesTheSource(t *testing.T) {
+	source := &fakeSource{overview: twoCameras()}
+	handler := newServer(t, source, nil, nil)
+	recorder := do(handler, http.MethodPost, "/api/credentials/refresh", "{}", true)
+	if recorder.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want %d (%s)", recorder.Code, http.StatusAccepted, recorder.Body)
+	}
+	if source.refreshCalls != 1 {
+		t.Fatalf("refresh requests = %d, want 1", source.refreshCalls)
+	}
+}
+
+// An action this deployment does not offer is a 404, not a 500: nothing broke.
+func TestAnUnsupportedActionIsNotFound(t *testing.T) {
+	source := &fakeSource{overview: twoCameras(), mediaEr: ErrUnsupported, refreshEr: ErrUnsupported}
+	handler := newServer(t, source, nil, nil)
+	for _, target := range []string{"/api/media/restart", "/api/credentials/refresh"} {
+		recorder := do(handler, http.MethodPost, target, "{}", true)
+		if recorder.Code != http.StatusNotFound {
+			t.Fatalf("%s status = %d, want %d", target, recorder.Code, http.StatusNotFound)
+		}
+	}
+}
+
+// A failing repair is the media server's problem, not the request's.
+func TestAFailedActionIsABadGateway(t *testing.T) {
+	source := &fakeSource{overview: twoCameras(), mediaEr: errors.New("connection refused")}
+	handler := newServer(t, source, nil, nil)
+	recorder := do(handler, http.MethodPost, "/api/media/restart", "{}", true)
+	if recorder.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusBadGateway)
+	}
+}
+
+// A charset parameter is part of a perfectly ordinary JSON content type. The
+// pairing page already accepted one; refusing it here was an inconsistency
+// waiting for the first proxy that adds one.
+func TestAContentTypeWithACharsetIsAccepted(t *testing.T) {
+	source := &fakeSource{overview: twoCameras()}
+	handler := newServer(t, source, nil, nil)
+	request := httptest.NewRequest(http.MethodPost, "/api/cameras/restart", strings.NewReader(`{"id":"a"}`))
+	request.RemoteAddr = "172.30.32.2:41000"
+	request.Header.Set("Content-Type", "application/json; charset=utf-8")
+	request.Header.Set(ingress.UserIDHeader, "01HQ")
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want %d (%s)", recorder.Code, http.StatusAccepted, recorder.Body)
+	}
+}
+
+// The new actions are behind the same gate as everything else.
+func TestTheActionsNeedAHomeAssistantSession(t *testing.T) {
+	source := &fakeSource{overview: twoCameras()}
+	handler := newServer(t, source, nil, nil)
+	for _, target := range []string{"/api/media/restart", "/api/credentials/refresh"} {
+		if recorder := do(handler, http.MethodPost, target, "{}", false); recorder.Code != http.StatusUnauthorized {
+			t.Fatalf("%s status = %d, want %d", target, recorder.Code, http.StatusUnauthorized)
+		}
 	}
 }

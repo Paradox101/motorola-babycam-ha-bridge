@@ -104,6 +104,8 @@ const page = `<!doctype html>
   .diag dt { color: var(--muted); font-size: .78rem; }
   .diag dd { margin: 2px 0 0; font-variant-numeric: tabular-nums; }
   .empty { color: var(--muted); text-align: center; padding: 44px 0; }
+  .diag .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+  .diag .hint { margin: 10px 0 0; color: var(--warn); font-size: 13px; line-height: 1.45; }
   [hidden] { display: none !important; }
 </style>
 </head>
@@ -127,7 +129,13 @@ const page = `<!doctype html>
       <div><dt>Cameras serving</dt><dd id="d-serving">—</dd></div>
       <div><dt>Media server</dt><dd id="d-media">—</dd></div>
       <div><dt>MQTT</dt><dd id="d-mqtt">—</dd></div>
+      <div><dt>Stream host</dt><dd id="d-host">—</dd></div>
     </dl>
+    <p class="hint" id="host-hint" hidden></p>
+    <div class="actions">
+      <button id="media-restart" hidden>Restart media server</button>
+      <button id="creds-refresh" hidden>Refresh credentials</button>
+    </div>
   </section>
 </main>
 <script>
@@ -491,6 +499,14 @@ const page = `<!doctype html>
   }
 
   function still(parts) {
+    // A still can legitimately be missing — the media server may still be
+    // starting the stream — and a failed <img> renders as a torn-page icon
+    // over the whole card. Clear it instead and let the next poll try again.
+    parts.still.onerror = function () {
+      parts.still.removeAttribute("src");
+      parts.still.hidden = true;
+    };
+    parts.still.onload = function () { parts.still.hidden = false; };
     parts.still.src = "camera-still?src=" + encodeURIComponent(parts.camera.stream) + "&t=" + Date.now();
   }
 
@@ -597,12 +613,64 @@ const page = `<!doctype html>
       el("d-serving").textContent = serving + " of " + list.length;
       el("d-media").textContent = data.go2rtc_ready ? "up" : "down";
       el("d-mqtt").textContent = data.mqtt_enabled ? (data.mqtt_connected ? "connected" : "disconnected") : "off";
+      el("d-host").textContent = data.stream_host || "not set";
+      hostHint(data.stream_host);
+      el("media-restart").hidden = !data.can_restart_media;
+      el("creds-refresh").hidden = !data.can_refresh_credentials;
 
       say(data.go2rtc_ready ? "" : "The media server is not answering, so live video and stills are unavailable.");
     }).catch(function () {
       say("Could not reach the add-on.");
     });
   }
+
+  // stream_host is the address this add-on hands out for RTSP and WebRTC media.
+  // The browser reached this page over an address that demonstrably works, so
+  // when the two differ that is worth saying: it is the reason live video falls
+  // back to MSE, and the reason an RTSP URL copied from here resolves nowhere.
+  function hostHint(streamHost) {
+    var hint = el("host-hint");
+    var here = location.hostname;
+    if (!streamHost || !here || streamHost === here) { hint.hidden = true; return; }
+    hint.textContent = "This add-on advertises " + streamHost + " for RTSP and WebRTC, but you reached "
+      + "this page at " + here + ". If live video keeps falling back to MSE, or an RTSP URL from here "
+      + "does not resolve, set stream_host to an address your players can reach.";
+    hint.hidden = false;
+  }
+
+  // act runs one repair from the diagnostics panel. Both take a moment and both
+  // are worth confirming in place, because neither changes anything visible on
+  // the page by itself.
+  function act(button, path, busyText, doneText) {
+    var original = button.textContent;
+    button.disabled = true;
+    button.textContent = busyText;
+    fetch(path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}"
+    }).then(function (response) {
+      if (!response.ok) { throw new Error("failed"); }
+      button.textContent = doneText;
+      say("");
+    }).catch(function () {
+      button.textContent = original;
+      say("That did not work. The add-on log has the reason.");
+    }).then(function () {
+      setTimeout(function () {
+        button.textContent = original;
+        button.disabled = false;
+        refresh();
+      }, 2500);
+    });
+  }
+
+  el("media-restart").addEventListener("click", function () {
+    act(this, "api/media/restart", "Restarting…", "Restarting");
+  });
+  el("creds-refresh").addEventListener("click", function () {
+    act(this, "api/credentials/refresh", "Refreshing…", "Refresh started");
+  });
 
   el("diag-toggle").addEventListener("click", function () {
     var panel = el("diag");
