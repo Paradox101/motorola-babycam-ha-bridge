@@ -19,6 +19,7 @@ import (
 	"log/slog"
 	"net/http"
 	"sort"
+	"strings"
 
 	"github.com/local/motorola-vm65-bridge/internal/ingress"
 )
@@ -67,6 +68,15 @@ type Overview struct {
 	Reconnects uint64 `json:"reconnects"`
 	// UptimeSeconds is how long the add-on has been running.
 	UptimeSeconds int64 `json:"uptime_seconds"`
+	// StreamHost is the host the add-on advertises for RTSP and WebRTC media.
+	// The page compares it with the address the browser actually used, because
+	// a stream_host that resolves nowhere the browser can reach is the most
+	// common reason live video falls back to MSE or fails outright.
+	StreamHost string `json:"stream_host,omitempty"`
+	// CanRestartMedia and CanRefreshCredentials report which repair actions
+	// this deployment offers, so the page shows only buttons that work.
+	CanRestartMedia       bool `json:"can_restart_media"`
+	CanRefreshCredentials bool `json:"can_refresh_credentials"`
 }
 
 // Source is what the page reads and acts on.
@@ -74,10 +84,22 @@ type Source interface {
 	// Overview reports the current state of every camera.
 	Overview() Overview
 	// Restart drops one camera's bridge so the supervisor rebuilds it. It is
-	// the one repair worth offering: a tunnel that went bad recovers from it,
+	// the first repair worth offering: a tunnel that went bad recovers from it,
 	// and it touches nothing else.
 	Restart(id string) error
+	// RestartMedia restarts the bundled media server. It is the repair for the
+	// state one level up: every camera plays over the relay but no picture
+	// arrives, because go2rtc itself is wedged.
+	RestartMedia() error
+	// RefreshCredentials asks whatever supervises this process to fetch fresh
+	// camera credentials now instead of at the next scheduled refresh.
+	RefreshCredentials() error
 }
+
+// ErrUnsupported is what a Source returns for an action this deployment does
+// not offer. The page never shows such a button, so reaching this is a request
+// that was built by hand.
+var ErrUnsupported = errors.New("this action is not available in this deployment")
 
 type Config struct {
 	Source Source
@@ -124,6 +146,8 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/cameras", s.handleOverview)
 	mux.HandleFunc("/api/cameras/restart", s.handleRestart)
+	mux.HandleFunc("/api/media/restart", s.handleMediaRestart)
+	mux.HandleFunc("/api/credentials/refresh", s.handleCredentialRefresh)
 	if s.snapshot != nil {
 		// Deliberately not /snapshot: that path stays the token-protected one
 		// Home Assistant fetches, and it is mounted ahead of this page.
@@ -190,24 +214,10 @@ func (s *Server) handleOverview(writer http.ResponseWriter, request *http.Reques
 }
 
 func (s *Server) handleRestart(writer http.ResponseWriter, request *http.Request) {
-	if request.Method != http.MethodPost {
-		writer.Header().Set("Allow", "POST")
-		http.Error(writer, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	// JSON only, so another site cannot post here without a preflight this
-	// server never answers.
-	if mediaType := request.Header.Get("Content-Type"); mediaType != "application/json" {
-		http.Error(writer, "expected a JSON body", http.StatusUnsupportedMediaType)
-		return
-	}
 	var body struct {
 		ID string `json:"id"`
 	}
-	decoder := json.NewDecoder(http.MaxBytesReader(writer, request.Body, 4<<10))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&body); err != nil {
-		writeJSON(writer, http.StatusBadRequest, errorBody{Error: "The request could not be read."})
+	if !s.decode(writer, request, &body) {
 		return
 	}
 	if err := s.source.Restart(body.ID); err != nil {
@@ -217,6 +227,75 @@ func (s *Server) handleRestart(writer http.ResponseWriter, request *http.Request
 	}
 	s.logger.Info("camera bridge restarted from the Web UI")
 	writeJSON(writer, http.StatusAccepted, map[string]string{"status": "restarting"})
+}
+
+// handleMediaRestart restarts the media server. Every camera keeps its relay
+// tunnel; only the process that turns those tunnels into playable video comes
+// back, which is the repair for "the tunnels are up and there is still no
+// picture".
+func (s *Server) handleMediaRestart(writer http.ResponseWriter, request *http.Request) {
+	var body struct{}
+	if !s.decode(writer, request, &body) {
+		return
+	}
+	if err := s.source.RestartMedia(); err != nil {
+		s.action(writer, err, "media server restart failed", "The media server could not be restarted.")
+		return
+	}
+	s.logger.Info("media server restarted from the Web UI")
+	writeJSON(writer, http.StatusAccepted, map[string]string{"status": "restarting"})
+}
+
+// handleCredentialRefresh asks the supervising entrypoint to fetch fresh
+// credentials now. It is the button for an expired session, which otherwise
+// costs a wait until the next scheduled refresh or an add-on restart.
+func (s *Server) handleCredentialRefresh(writer http.ResponseWriter, request *http.Request) {
+	var body struct{}
+	if !s.decode(writer, request, &body) {
+		return
+	}
+	if err := s.source.RefreshCredentials(); err != nil {
+		s.action(writer, err, "credential refresh request failed", "The credential refresh could not be started.")
+		return
+	}
+	s.logger.Info("credential refresh requested from the Web UI")
+	writeJSON(writer, http.StatusAccepted, map[string]string{"status": "refreshing"})
+}
+
+// action reports one failed repair. An action this deployment does not offer is
+// a 404 rather than a 500: nothing broke, the button simply does not exist here.
+func (s *Server) action(writer http.ResponseWriter, err error, logMessage, userMessage string) {
+	if errors.Is(err, ErrUnsupported) {
+		writeJSON(writer, http.StatusNotFound, errorBody{Error: "That action is not available here."})
+		return
+	}
+	s.logger.Warn(logMessage, "err", err)
+	writeJSON(writer, http.StatusBadGateway, errorBody{Error: userMessage})
+}
+
+// decode reads a JSON body from a POST. Requiring JSON is also what keeps
+// another site from posting here: a cross-origin form cannot set this content
+// type without a preflight, and no CORS headers are ever sent. Parameters after
+// the media type are ignored, so a client that appends a charset is not refused
+// for a reason nobody would guess from the message.
+func (s *Server) decode(writer http.ResponseWriter, request *http.Request, value any) bool {
+	if request.Method != http.MethodPost {
+		writer.Header().Set("Allow", "POST")
+		http.Error(writer, "method not allowed", http.StatusMethodNotAllowed)
+		return false
+	}
+	mediaType, _, _ := strings.Cut(request.Header.Get("Content-Type"), ";")
+	if strings.TrimSpace(mediaType) != "application/json" {
+		http.Error(writer, "expected a JSON body", http.StatusUnsupportedMediaType)
+		return false
+	}
+	decoder := json.NewDecoder(http.MaxBytesReader(writer, request.Body, 4<<10))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(value); err != nil {
+		writeJSON(writer, http.StatusBadRequest, errorBody{Error: "The request could not be read."})
+		return false
+	}
+	return true
 }
 
 type errorBody struct {

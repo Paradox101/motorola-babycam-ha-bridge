@@ -109,6 +109,37 @@ jobs:
       - run: shellcheck homeassistant/vm65-bridge/run.sh
       - run: bats homeassistant/vm65-bridge/tests/run.bats
 
+  addon:
+    name: add-on image / ${{ matrix.arch }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+          - arch: aarch64
+            platform: linux/arm64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      # The add-on image is the one users actually install, and it is not the
+      # image the job below builds: it has its own base, its own ffmpeg and its
+      # own clone of this repository. Building it from the branch under test is
+      # what keeps a break in it from reaching an installation first.
+      - name: Build the add-on image without publishing
+        uses: docker/build-push-action@v6
+        with:
+          context: homeassistant/vm65-bridge
+          file: homeassistant/vm65-bridge/Dockerfile
+          platforms: ${{ matrix.platform }}
+          push: false
+          build-args: |
+            BUILD_ARCH=${{ matrix.arch }}
+            SOURCE_REF=${{ github.head_ref || github.ref_name }}
+          tags: motorola-nursery-addon:ci-${{ matrix.arch }}
+
   docker:
     name: container / ${{ matrix.platform }}
     runs-on: ubuntu-latest
