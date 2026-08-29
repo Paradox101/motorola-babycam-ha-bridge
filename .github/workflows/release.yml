@@ -24,7 +24,10 @@ jobs:
           cache: true
       - name: Require an annotated tag
         shell: bash
-        run: test "$(git cat-file -t "${GITHUB_REF_NAME}")" = tag
+        # actions/checkout peels the tag while checking out its target commit.
+        # Ask the remote for the peeled ref instead: it exists only for an
+        # annotated tag and cannot be altered by the checkout step.
+        run: git ls-remote --tags origin "refs/tags/${GITHUB_REF_NAME}^{}" | grep -q .
       - name: Install validator dependency
         run: python -m pip install --disable-pip-version-check PyYAML==6.0.3
       - name: Validate release contract
