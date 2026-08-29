@@ -124,6 +124,11 @@ def validate_addon(root: Path) -> list[str]:
     slug = str(config.get("slug") or "")
     if slug != "vm65_bridge":
         errors.append("add-on slug must remain vm65_bridge")
+
+    if config.get("image") != "ghcr.io/paradox101/{arch}-motorola-nursery-homeassistant-bridge":
+        errors.append(
+            "image must be ghcr.io/paradox101/{arch}-motorola-nursery-homeassistant-bridge"
+        )
     try:
         apparmor = apparmor_path.read_text(encoding="utf-8")
     except OSError:
