@@ -8,9 +8,8 @@ name: Add-on image
 # architectures do not match. That is minutes of installation time that fails
 # whenever GitHub, the module proxy or Docker Hub is briefly unreachable.
 #
-# The image is not referenced from config.yaml yet. Setting `image:` there
-# points every installation at this registry, so it is only worth doing once
-# tags exist here for both architectures; docs/releases.md carries that step.
+# The manifest's `image:` selects these published images for both supported
+# architectures, so Home Assistant pulls them instead of building locally.
 
 on:
   push:
@@ -78,5 +77,3 @@ jobs:
           tags: |
             ghcr.io/${{ steps.owner.outputs.owner }}/${{ matrix.arch }}-motorola-nursery-homeassistant-bridge:${{ steps.addon.outputs.version }}
             ghcr.io/${{ steps.owner.outputs.owner }}/${{ matrix.arch }}-motorola-nursery-homeassistant-bridge:latest
-            ghcr.io/${{ steps.owner.outputs.owner }}/${{ matrix.arch }}-vm65-bridge:${{ steps.addon.outputs.version }}
-            ghcr.io/${{ steps.owner.outputs.owner }}/${{ matrix.arch }}-vm65-bridge:latest
