@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.10.7
+
+### Changed
+
+- Publish only the model-neutral Motorola Nursery Homeassistant Bridge GHCR
+  packages; VM65 compatibility package tags are no longer created.
+
 ## 0.10.6
 
 ### Fixed

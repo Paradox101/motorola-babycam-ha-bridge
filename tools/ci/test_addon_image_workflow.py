@@ -7,8 +7,8 @@ class AddonImageWorkflowTests(unittest.TestCase):
         workflow = Path(".github/workflows/addon-image.yml").read_text(encoding="utf-8")
 
         self.assertIn('echo "owner=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_OUTPUT"', workflow)
-        self.assertIn("ghcr.io/${{ steps.owner.outputs.owner }}/${{ matrix.arch }}-vm65-bridge:", workflow)
         self.assertIn("ghcr.io/${{ steps.owner.outputs.owner }}/${{ matrix.arch }}-motorola-nursery-homeassistant-bridge:", workflow)
+        self.assertNotIn("${{ matrix.arch }}-vm65-bridge:", workflow)
 
 
 if __name__ == "__main__":
