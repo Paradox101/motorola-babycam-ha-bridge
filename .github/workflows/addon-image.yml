@@ -48,6 +48,12 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      # GHCR repository names are lowercase, while GitHub preserves the
+      # account's original casing in github.repository_owner.
+      - name: Normalize the image owner
+        id: owner
+        shell: bash
+        run: echo "owner=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_OUTPUT"
       # The add-on version, not the tag: it is what the Supervisor compares
       # against the installed version, and what the built binaries report.
       - name: Read the add-on version
@@ -70,5 +76,5 @@ jobs:
             BUILD_ARCH=${{ matrix.arch }}
             SOURCE_REF=${{ inputs.ref || github.ref_name }}
           tags: |
-            ghcr.io/${{ github.repository_owner }}/${{ matrix.arch }}-vm65-bridge:${{ steps.addon.outputs.version }}
-            ghcr.io/${{ github.repository_owner }}/${{ matrix.arch }}-vm65-bridge:latest
+            ghcr.io/${{ steps.owner.outputs.owner }}/${{ matrix.arch }}-vm65-bridge:${{ steps.addon.outputs.version }}
+            ghcr.io/${{ steps.owner.outputs.owner }}/${{ matrix.arch }}-vm65-bridge:latest
