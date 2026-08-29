@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.10.6
+
+### Fixed
+
+- Fixed release validation for annotated tags after GitHub Actions checks out
+  the tag target commit.
+
 ## 0.10.5
 
 ### Changed
