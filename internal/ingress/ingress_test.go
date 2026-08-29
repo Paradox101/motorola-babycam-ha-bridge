@@ -2,11 +2,13 @@ package ingress
 
 import (
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 )
 
 func newTestHandler(t *testing.T, upstream string, streams ...string) http.Handler {
@@ -203,5 +205,88 @@ func TestUnavailableUpstreamReportsBadGateway(t *testing.T) {
 	handler.ServeHTTP(recorder, authenticated(http.MethodGet, "/"))
 	if recorder.Code != http.StatusBadGateway {
 		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusBadGateway)
+	}
+}
+
+// MSE is what carries live video when WebRTC cannot — over Nabu Casa or any
+// reverse proxy, where the browser never reaches the host's UDP port — and it
+// runs entirely over this WebSocket. If the upgrade does not survive the proxy,
+// remote viewing has no working transport at all.
+func TestWebSocketUpgradeIsForwarded(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Header.Get("Upgrade") != "websocket" {
+			t.Errorf("upstream saw Upgrade = %q", request.Header.Get("Upgrade"))
+			writer.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		hijacker, ok := writer.(http.Hijacker)
+		if !ok {
+			t.Error("upstream cannot hijack")
+			return
+		}
+		conn, _, err := hijacker.Hijack()
+		if err != nil {
+			t.Errorf("hijack: %v", err)
+			return
+		}
+		defer conn.Close()
+		_, _ = conn.Write([]byte("HTTP/1.1 101 Switching Protocols\r\n" +
+			"Upgrade: websocket\r\nConnection: Upgrade\r\n\r\n"))
+		_, _ = conn.Write([]byte("frame-bytes"))
+	}))
+	defer upstream.Close()
+
+	proxy := httptest.NewServer(newTestHandler(t, upstream.URL, "vm65"))
+	defer proxy.Close()
+
+	address := strings.TrimPrefix(proxy.URL, "http://")
+	conn, err := net.Dial("tcp", address)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+	_, _ = conn.Write([]byte("GET /api/ws?src=vm65 HTTP/1.1\r\n" +
+		"Host: " + address + "\r\n" +
+		"Upgrade: websocket\r\nConnection: Upgrade\r\n" +
+		"Sec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n" +
+		UserIDHeader + ": 01HQ\r\n\r\n"))
+
+	if err := conn.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	buffer := make([]byte, 512)
+	read, err := conn.Read(buffer)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	response := string(buffer[:read])
+	if !strings.Contains(response, "101 Switching Protocols") {
+		t.Fatalf("response = %q, want a protocol switch", response)
+	}
+	if !strings.Contains(response, "frame-bytes") {
+		// The bytes may land in a second read; take one more look before failing.
+		read, err = conn.Read(buffer)
+		if err != nil || !strings.Contains(string(buffer[:read]), "frame-bytes") {
+			t.Fatalf("stream bytes never arrived: %v", err)
+		}
+	}
+}
+
+// The same upgrade must still be refused for a stream this add-on never
+// configured: an upgrade is not an escape from the source check.
+func TestWebSocketUpgradeForAnUnknownStreamIsRefused(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Error("upstream must not be reached")
+	}))
+	defer upstream.Close()
+
+	handler := newTestHandler(t, upstream.URL, "vm65")
+	request := authenticated(http.MethodGet, "/api/ws?src="+url.QueryEscape("exec:/bin/sh"))
+	request.Header.Set("Upgrade", "websocket")
+	request.Header.Set("Connection", "Upgrade")
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusForbidden)
 	}
 }
