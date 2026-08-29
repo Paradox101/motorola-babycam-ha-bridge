@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.10.2
+
+### Fixed
+
+- Republished the add-on release after moving its build source to the fixed
+  release branch, so local Home Assistant builds include the entrypoint fix.
+
 ## 0.10.1
 
 ### Fixed
