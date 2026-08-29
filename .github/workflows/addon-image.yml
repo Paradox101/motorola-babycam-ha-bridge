@@ -76,5 +76,7 @@ jobs:
             BUILD_ARCH=${{ matrix.arch }}
             SOURCE_REF=${{ inputs.ref || github.ref_name }}
           tags: |
+            ghcr.io/${{ steps.owner.outputs.owner }}/${{ matrix.arch }}-motorola-nursery-homeassistant-bridge:${{ steps.addon.outputs.version }}
+            ghcr.io/${{ steps.owner.outputs.owner }}/${{ matrix.arch }}-motorola-nursery-homeassistant-bridge:latest
             ghcr.io/${{ steps.owner.outputs.owner }}/${{ matrix.arch }}-vm65-bridge:${{ steps.addon.outputs.version }}
             ghcr.io/${{ steps.owner.outputs.owner }}/${{ matrix.arch }}-vm65-bridge:latest
