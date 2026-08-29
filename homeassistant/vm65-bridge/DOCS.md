@@ -170,15 +170,41 @@ outside the Supervisor network. Only administrators see the add-on panel.
 
 ## The Web UI
 
-The Web UI is the add-on's own page, not go2rtc's. It lists cameras rather than
-stream names, and per camera shows a still, live WebRTC video on demand, whether
-the relay tunnel is up, how many people are watching and the temperature when
-the camera reports one. Each card can copy the RTSP URL and restart just that
-camera's bridge — the repair worth having, because a tunnel that went bad
-recovers from it while every other camera keeps streaming.
+The Web UI is the add-on's own page, not go2rtc's. Cameras start playing live as
+soon as the page opens. Each card shows whether the relay tunnel is up, how many
+people are watching and the temperature when the camera reports one, and can
+turn sound on, go fullscreen, save a still, copy the RTSP URL, or restart just
+that camera's bridge — the repair worth having, because a tunnel that went bad
+recovers from it while every other camera keeps streaming. Click a picture to
+enlarge it and press Escape to go back; the **Diagnostics** button shows uptime,
+restarts, sessions and the media and broker links.
+
+### How live video reaches you
+
+Three transports, tried in order, with a badge on each card saying which one is
+carrying the picture:
+
+| Transport | Latency | Works |
+| --- | --- | --- |
+| WebRTC | under a second | on your local network |
+| MSE | about a second | anywhere the page itself loads |
+| MJPEG | a few seconds, no sound | when the other two are blocked |
+
+The order matters because **WebRTC media never passes through Ingress**: the
+browser talks to the host's UDP port directly, so it is the best option at home
+and no option at all over Nabu Casa or a reverse proxy. MSE runs over the
+WebSocket the add-on proxies, so it works wherever the page works. Each attempt
+is timed out and falls through on its own — a transport that connects and then
+delivers nothing is treated as a failure, because that is the common one.
+
+A picture that says `mjpeg` means both faster paths were blocked. That is worth
+knowing: it is the reason for the lag and the missing sound, not the camera.
+
+Playback stops when the browser tab is hidden, so a forgotten tab does not keep
+pulling video over the relay.
 
 go2rtc stays behind the page and is reached only for the media endpoints the
-player needs. Its own interface and API are no longer served at all.
+player needs. Its own interface and API are not served at all.
 
 ## Snapshots
 

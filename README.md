@@ -23,10 +23,11 @@ stream alias and `vm65_bridge` add-on slug.
   without adding an integration by hand, plus snapshot, link and temperature
   entities (when supported) and bridge diagnostics, all retained and
   reconnect-safe;
-- the add-on's own Web UI over Home Assistant Ingress — live WebRTC video, link
-  and temperature state and a per-camera restart — authenticated against the
-  Home Assistant session the Supervisor identifies, with go2rtc kept on
-  container loopback;
+- the add-on's own Web UI over Home Assistant Ingress — live video that falls
+  through WebRTC, MSE and MJPEG so it plays on the local network and through
+  Nabu Casa alike, with sound, fullscreen, stills, link and temperature state
+  and a per-camera restart — authenticated against the Home Assistant session
+  the Supervisor identifies, with go2rtc kept on container loopback;
 - cached snapshot images per camera, served by the bridge so a cold camera still
   produces a picture inside the timeout Home Assistant allows;
 - automatic restart of a failed camera bridge, with exponential backoff;
