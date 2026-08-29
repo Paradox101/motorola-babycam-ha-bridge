@@ -290,3 +290,47 @@ func TestWebSocketUpgradeForAnUnknownStreamIsRefused(t *testing.T) {
 		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusForbidden)
 	}
 }
+
+// go2rtc refuses a WebSocket whose Origin is not its own host. Through Ingress
+// the browser's Origin is Home Assistant, so every MSE attempt came back 403
+// and remote viewing had no transport left. The request has already passed this
+// add-on's authentication and stream check by the time it is forwarded, which
+// is what Origin would have been guarding.
+func TestOriginIsRewrittenForTheUpstream(t *testing.T) {
+	var seen string
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		seen = request.Header.Get("Origin")
+		writer.WriteHeader(http.StatusOK)
+	}))
+	defer upstream.Close()
+
+	handler := newTestHandler(t, upstream.URL, "vm65")
+	handler.ServeHTTP(httptest.NewRecorder(), request(http.MethodGet, "/api/ws?src=vm65", map[string]string{
+		UserIDHeader: "01HQ",
+		"Origin":     "http://192.168.6.45:8123",
+	}))
+
+	upstreamURL, err := url.Parse(upstream.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "http://" + upstreamURL.Host; seen != want {
+		t.Fatalf("Origin = %q, want %q", seen, want)
+	}
+}
+
+// A request that carried no Origin must not gain one.
+func TestNoOriginIsInvented(t *testing.T) {
+	var present bool
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		_, present = request.Header["Origin"]
+		writer.WriteHeader(http.StatusOK)
+	}))
+	defer upstream.Close()
+
+	handler := newTestHandler(t, upstream.URL, "vm65")
+	handler.ServeHTTP(httptest.NewRecorder(), authenticated(http.MethodGet, "/api/ws?src=vm65"))
+	if present {
+		t.Fatal("an Origin header was invented for a request that had none")
+	}
+}
