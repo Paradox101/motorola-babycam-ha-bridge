@@ -33,6 +33,10 @@ type Camera struct {
 	Model string `json:"model,omitempty"`
 	// Stream is the go2rtc stream name, which is what the player asks for.
 	Stream string `json:"stream"`
+	// MJPEGStream is the companion stream that transcodes to MJPEG. go2rtc
+	// will not transcode for a plain MJPEG request, so the last-resort
+	// transport has to name this one instead.
+	MJPEGStream string `json:"mjpeg_stream,omitempty"`
 	// StreamURL is the RTSP URL for an external player.
 	StreamURL string `json:"stream_url,omitempty"`
 	// Serving reports whether this camera's bridge is accepting connections

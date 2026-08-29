@@ -99,6 +99,15 @@ func NewHandler(cfg Config) (http.Handler, error) {
 			// SetXForwarded replaces whatever the client sent, so a forged
 			// X-Forwarded-For cannot reach go2rtc either.
 			request.SetXForwarded()
+			// go2rtc refuses a WebSocket whose Origin is not its own host, and
+			// through Ingress the browser's Origin is Home Assistant — which
+			// cost every MSE attempt a 403 and left remote viewing with no
+			// transport. Presenting the upstream's own origin is honest here:
+			// the request already passed this add-on's authentication and its
+			// stream check, which is what Origin would have been guarding.
+			if request.In.Header.Get("Origin") != "" {
+				request.Out.Header.Set("Origin", target.Scheme+"://"+target.Host)
+			}
 			for _, header := range remoteUserHeaders {
 				if value := request.In.Header.Get(header); value != "" {
 					request.Out.Header.Set(header, value)
