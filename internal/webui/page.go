@@ -59,21 +59,25 @@ const page = `<!doctype html>
   .cam { background: var(--card); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; }
   .frame { position: relative; aspect-ratio: 16 / 9; background: #000; cursor: zoom-in; }
   .grid.focus .frame { cursor: zoom-out; }
-  .frame > * { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
+  /* Only the picture fills the frame. This used to be .frame > *, which also
+     stretched the badge — a pill with a 999px radius — across the whole card. */
+  .frame video, .frame img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
   .frame video { z-index: 2; background: transparent; }
   .frame video.hidden, .frame img.live.hidden { display: none; }
   .frame img.still { z-index: 1; filter: saturate(.9); }
   .frame img.live { z-index: 2; }
-  .overlay {
-    z-index: 3; display: flex; align-items: center; justify-content: center;
-    color: #fff; font-size: .82rem; text-shadow: 0 1px 3px rgba(0,0,0,.8);
-    background: linear-gradient(transparent 55%, rgba(0,0,0,.35));
-    pointer-events: none;
-  }
   .badge {
-    position: absolute; z-index: 4; left: 10px; top: 10px; font-size: .7rem;
+    position: absolute; z-index: 4; left: 10px; top: 10px;
+    width: auto; height: auto; font-size: .7rem;
     letter-spacing: .04em; text-transform: uppercase; padding: 3px 9px;
     border-radius: 999px; background: rgba(0,0,0,.62); color: #fff;
+    pointer-events: none;
+  }
+  .why {
+    position: absolute; z-index: 4; left: 10px; right: 10px; bottom: 10px;
+    width: auto; height: auto; font-size: .72rem; line-height: 1.35;
+    padding: 6px 9px; border-radius: 8px; background: rgba(0,0,0,.72);
+    color: #fff; pointer-events: none;
   }
   .badge.live { background: rgba(30,142,62,.85); }
   .badge.warn { background: rgba(176,96,0,.85); }
@@ -179,9 +183,36 @@ const page = `<!doctype html>
     this.parts.badge.className = "badge" + (kind ? " " + kind : "");
   };
 
+  // note records why a transport gave up. A card that simply says
+  // "unavailable" is not something anyone can act on; the reason each of the
+  // three was refused is what says whether to look at the network, the media
+  // server or the camera.
+  Player.prototype.note = function (mode, reason) {
+    this.reasons = this.reasons || {};
+    this.reasons[mode] = reason;
+  };
+
+  Player.prototype.showReasons = function () {
+    var reasons = this.reasons || {};
+    var lines = ["webrtc", "mse", "mjpeg"].filter(function (mode) {
+      return reasons[mode];
+    }).map(function (mode) {
+      return mode + ": " + reasons[mode];
+    });
+    this.parts.why.textContent = lines.join(" · ");
+    this.parts.why.hidden = !lines.length;
+  };
+
+  Player.prototype.clearReasons = function () {
+    this.reasons = {};
+    this.parts.why.hidden = true;
+    this.parts.why.textContent = "";
+  };
+
   Player.prototype.start = function () {
     if (!this.stopped) { return; }
     this.stopped = false;
+    this.clearReasons();
     this.attempt("webrtc");
   };
 
@@ -191,6 +222,7 @@ const page = `<!doctype html>
     this.mode = null;
     this.parts.video.classList.add("hidden");
     this.parts.live.classList.add("hidden");
+    this.parts.why.hidden = true;
     this.badge("paused");
     this.parts.play.textContent = "Watch live";
     this.parts.play.classList.remove("on");
@@ -213,6 +245,7 @@ const page = `<!doctype html>
     clearTimeout(this.watchdog);
     this.watchdog = null;
     this.mode = mode;
+    this.parts.why.hidden = true;
     this.badge(mode === "mjpeg" ? "mjpeg" : mode, "live");
     this.parts.play.textContent = "Stop";
     this.parts.play.classList.add("on");
@@ -221,12 +254,14 @@ const page = `<!doctype html>
 
   // next falls through to the transport after the one that failed. The order
   // is fixed, so a failure never loops back to something already refused.
-  Player.prototype.next = function (from) {
+  Player.prototype.next = function (from, reason) {
     if (this.stopped || this.mode) { return; }
+    this.note(from, reason || "no picture");
     this.teardown();
     if (from === "webrtc") { this.attempt("mse"); return; }
     if (from === "mse") { this.attempt("mjpeg"); return; }
     this.badge("unavailable", "warn");
+    this.showReasons();
     this.parts.play.textContent = "Retry";
     this.parts.play.classList.remove("on");
     this.stopped = true;
@@ -237,15 +272,22 @@ const page = `<!doctype html>
     this.badge("connecting " + mode);
     var self = this;
     // Nothing is trusted to fail loudly: a transport that neither errors nor
-    // delivers a frame is the common case, so every attempt is timed.
-    this.watchdog = setTimeout(function () { self.next(mode); }, mode === "webrtc" ? 5000 : 8000);
+    // delivers a frame is the common case, so every attempt is timed. MJPEG
+    // gets longest — starting an H264 transcode from cold is not quick.
+    var budget = mode === "webrtc" ? 6000 : (mode === "mse" ? 10000 : 15000);
+    this.watchdog = setTimeout(function () {
+      self.next(mode, "timed out after " + Math.round(budget / 1000) + "s");
+    }, budget);
     if (mode === "webrtc") { this.webrtc(); }
     else if (mode === "mse") { this.mse(); }
     else { this.mjpeg(); }
   };
 
   Player.prototype.webrtc = function () {
-    if (typeof RTCPeerConnection === "undefined") { this.next("webrtc"); return; }
+    if (typeof RTCPeerConnection === "undefined") {
+      this.next("webrtc", "not supported by this browser");
+      return;
+    }
     var self = this;
     var video = this.parts.video;
     var pc = new RTCPeerConnection({ iceServers: [], bundlePolicy: "max-bundle" });
@@ -258,7 +300,11 @@ const page = `<!doctype html>
       self.parts.live.classList.add("hidden");
     };
     pc.onconnectionstatechange = function () {
-      if (pc.connectionState === "failed" || pc.connectionState === "closed") { self.next("webrtc"); }
+      if (pc.connectionState === "failed" || pc.connectionState === "closed") {
+        // The usual cause: go2rtc advertised only its container address, so
+        // nothing outside the container can reach the media port.
+        self.next("webrtc", "peer connection " + pc.connectionState);
+      }
     };
     pc.createOffer().then(function (offer) {
       return pc.setLocalDescription(offer).then(function () {
@@ -269,18 +315,21 @@ const page = `<!doctype html>
         });
       });
     }).then(function (response) {
-      if (!response.ok) { throw new Error("refused"); }
+      if (!response.ok) { throw new Error("signalling returned " + response.status); }
       return response.json();
     }).then(function (answer) {
       if (self.pc !== pc) { return; }
       return pc.setRemoteDescription(new RTCSessionDescription(answer));
-    }).catch(function () {
-      self.next("webrtc");
+    }).catch(function (error) {
+      self.next("webrtc", (error && error.message) || "negotiation failed");
     });
   };
 
   Player.prototype.mse = function () {
-    if (typeof MediaSource === "undefined") { this.next("mse"); return; }
+    if (typeof MediaSource === "undefined") {
+      this.next("mse", "not supported by this browser");
+      return;
+    }
     var self = this;
     var video = this.parts.video;
     var candidates = [
@@ -289,31 +338,38 @@ const page = `<!doctype html>
     ].filter(function (codec) {
       return MediaSource.isTypeSupported('video/mp4; codecs="' + codec + '"');
     });
-    if (!candidates.length) { this.next("mse"); return; }
+    if (!candidates.length) { this.next("mse", "no supported codec"); return; }
 
     var ws;
     try {
       ws = new WebSocket(wsURL("api/ws?src=" + encodeURIComponent(this.parts.camera.stream)));
-    } catch (e) { this.next("mse"); return; }
+    } catch (e) { this.next("mse", "websocket blocked"); return; }
     ws.binaryType = "arraybuffer";
     this.ws = ws;
 
     var source = null, buffer = null, queue = [];
     var flush = function () {
       if (!buffer || buffer.updating || !queue.length) { return; }
-      try { buffer.appendBuffer(queue.shift()); } catch (e) { self.next("mse"); }
+      try { buffer.appendBuffer(queue.shift()); } catch (e) { self.next("mse", "buffer rejected"); }
     };
 
     ws.onopen = function () {
       ws.send(JSON.stringify({ type: "mse", value: candidates.join(",") }));
     };
-    ws.onerror = function () { self.next("mse"); };
-    ws.onclose = function () { if (!self.mode) { self.next("mse"); } };
+    ws.onerror = function () { self.next("mse", "websocket error"); };
+    ws.onclose = function (event) {
+      if (!self.mode) { self.next("mse", "websocket closed" + (event && event.code ? " (" + event.code + ")" : "")); }
+    };
     ws.onmessage = function (event) {
       if (self.ws !== ws) { return; }
       if (typeof event.data === "string") {
         var message;
         try { message = JSON.parse(event.data); } catch (e) { return; }
+        // go2rtc reports a stream it cannot serve on this same socket.
+        if (message.type === "error") {
+          self.next("mse", String(message.value || "refused").slice(0, 90));
+          return;
+        }
         if (message.type !== "mse" || !message.value) { return; }
         source = new MediaSource();
         video.src = URL.createObjectURL(source);
@@ -322,7 +378,7 @@ const page = `<!doctype html>
         source.addEventListener("sourceopen", function () {
           try {
             buffer = source.addSourceBuffer(message.value);
-          } catch (e) { self.next("mse"); return; }
+          } catch (e) { self.next("mse", "codec refused: " + message.value); return; }
           buffer.mode = "segments";
           buffer.addEventListener("updateend", flush);
           flush();
@@ -339,10 +395,18 @@ const page = `<!doctype html>
   Player.prototype.mjpeg = function () {
     var self = this;
     var image = this.parts.live;
-    image.onload = function () { self.playing("mjpeg"); };
-    image.onerror = function () { self.next("mjpeg"); };
+    image.onload = function () {
+      image.classList.remove("hidden");
+      self.playing("mjpeg");
+    };
+    image.onerror = function () {
+      // Leave nothing behind: a broken <img> renders as a torn-page icon over
+      // the still that was perfectly fine.
+      image.classList.add("hidden");
+      image.removeAttribute("src");
+      self.next("mjpeg", "stream refused");
+    };
     this.parts.video.classList.add("hidden");
-    image.classList.remove("hidden");
     image.src = "api/stream.mjpeg?src=" + encodeURIComponent(this.parts.camera.stream) +
       "&t=" + Date.now();
   };
@@ -357,8 +421,8 @@ const page = `<!doctype html>
         '<img class="still" alt="">' +
         '<img class="live hidden" alt="">' +
         '<video class="hidden" autoplay muted playsinline></video>' +
-        '<div class="overlay"></div>' +
         '<span class="badge">paused</span>' +
+        '<span class="why" hidden></span>' +
       '</div>' +
       '<div class="body">' +
         '<div class="title"><h2></h2><span class="temp"></span></div>' +
@@ -381,6 +445,7 @@ const page = `<!doctype html>
       live: root.querySelector("img.live"),
       video: root.querySelector("video"),
       badge: root.querySelector(".badge"),
+      why: root.querySelector(".why"),
       name: root.querySelector("h2"),
       temp: root.querySelector(".temp"),
       meta: root.querySelector(".meta"),

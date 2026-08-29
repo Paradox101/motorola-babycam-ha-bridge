@@ -200,6 +200,17 @@ delivers nothing is treated as a failure, because that is the common one.
 A picture that says `mjpeg` means both faster paths were blocked. That is worth
 knowing: it is the reason for the lag and the missing sound, not the camera.
 
+When a card ends up with no picture at all it prints why each transport was
+refused — a blocked websocket, a codec the browser will not take, a signalling
+error with its status code. The add-on log records anything the media server
+itself refused, with the path and status.
+
+WebRTC needs `stream_host` to be an address your browser can reach, the same as
+the RTSP URLs do: go2rtc advertises it as the address for media, and a name that
+only resolves inside Home Assistant leaves WebRTC negotiating a connection that
+carries nothing. If cards keep landing on `mse`, that is the first thing to
+check.
+
 Playback stops when the browser tab is hidden, so a forgotten tab does not keep
 pulling video over the relay.
 

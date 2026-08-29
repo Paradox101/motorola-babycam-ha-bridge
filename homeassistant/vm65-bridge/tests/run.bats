@@ -159,6 +159,13 @@ EOF
   [ "$(grep -c '^setup ' "$CALL_LOG")" -ge 2 ]
 }
 
+@test "go2rtc is given a WebRTC candidate browsers can reach" {
+  export TEST_BACKEND=bundled
+  run bash homeassistant/vm65-bridge/run.sh
+  [ "$status" -eq 7 ]
+  grep -q -- '-webrtc-candidate homeassistant.local:8556' "$CALL_LOG"
+}
+
 @test "the Web UI listens on the ingress port rather than go2rtc" {
   export TEST_BACKEND=bundled
   run bash homeassistant/vm65-bridge/run.sh

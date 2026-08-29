@@ -69,7 +69,7 @@ func TestWriteGo2RTCConfigPublishesEveryCameraAndLegacyAlias(t *testing.T) {
 			StreamName: "play-room", ListenAddr: "127.0.0.1:9554",
 		},
 	}}
-	if err := writeGo2RTCConfig(path, registry, true); err != nil {
+	if err := writeGo2RTCConfig(path, registry, true, "homeassistant.local:8556"); err != nil {
 		t.Fatal(err)
 	}
 	raw, err := os.ReadFile(path)
@@ -96,7 +96,7 @@ func TestWriteGo2RTCConfigCanDisableBundledWebRTC(t *testing.T) {
 		StreamName:        "nursery",
 		ListenAddr:        "127.0.0.1:8554",
 	}}}
-	if err := writeGo2RTCConfig(path, registry, false); err != nil {
+	if err := writeGo2RTCConfig(path, registry, false, ""); err != nil {
 		t.Fatal(err)
 	}
 	var config go2RTCConfig
@@ -264,5 +264,48 @@ func TestParseTrustedCIDRs(t *testing.T) {
 	}
 	if networks := parseTrustedCIDRs(" 172.30.32.0/23 , 10.0.0.0/8 "); len(networks) != 2 || networks[0] != "172.30.32.0/23" {
 		t.Fatalf("networks = %#v", networks)
+	}
+}
+
+// Inside a container go2rtc advertises only its own Docker address, which no
+// browser on the network can reach: WebRTC then negotiates successfully and
+// never delivers a packet. The candidate is what makes it reachable.
+func TestGeneratedConfigAdvertisesAReachableWebRTCCandidate(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "go2rtc.yaml")
+	registry := cameraRegistry{Cameras: []cameraRegistryEntry{{
+		CameraCredentials: fivegencare.CameraCredentials{DeviceUDID: "a", AccessToken: "token"},
+		StreamName:        "vm65-connect",
+		ListenAddr:        "127.0.0.1:8554",
+	}}}
+	if err := writeGo2RTCConfig(path, registry, true, "homeassistant.local:8556"); err != nil {
+		t.Fatal(err)
+	}
+	var config go2RTCConfig
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(raw, &config); err != nil {
+		t.Fatal(err)
+	}
+	if len(config.WebRTC.Candidates) != 1 || config.WebRTC.Candidates[0] != "homeassistant.local:8556" {
+		t.Fatalf("candidates = %#v", config.WebRTC.Candidates)
+	}
+
+	// External mode has no bundled WebRTC listener, so there is nothing to
+	// advertise and a candidate would be a lie.
+	if err := writeGo2RTCConfig(path, registry, false, "homeassistant.local:8556"); err != nil {
+		t.Fatal(err)
+	}
+	raw, err = os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config = go2RTCConfig{}
+	if err := json.Unmarshal(raw, &config); err != nil {
+		t.Fatal(err)
+	}
+	if config.WebRTC.Listen != "" || len(config.WebRTC.Candidates) != 0 {
+		t.Fatalf("webrtc = %#v", config.WebRTC)
 	}
 }

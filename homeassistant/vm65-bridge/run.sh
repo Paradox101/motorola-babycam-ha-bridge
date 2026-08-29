@@ -80,6 +80,9 @@ load_credentials() {
   local interactive="${1:-false}"
   bashio::log.info "Refreshing compatible camera credentials from Motorola Nursery"
   setup_args=(-email "${EMAIL}" -control-host "${CONTROL_HOST}" -output "${CREDS}" -registry "${REGISTRY}" -go2rtc-config "${GO2RTC_CFG}")
+  # Without this go2rtc offers only its container address for WebRTC media, so
+  # the browser negotiates a connection that can never carry a packet.
+  setup_args+=( -webrtc-candidate "${STREAM_HOST}:${EXTERNAL_STREAM_PORT}" )
   # A code is sent because someone pressed the button in the Web UI, not
   # because the add-on restarted.
   setup_args+=( -request-code=false )
