@@ -1,6 +1,6 @@
-# Motorola Nursery Bridge
+# Motorola Nursery Homeassistant Bridge
 
-Motorola Nursery Bridge connects compatible Motorola Nursery/5GenCare cameras
+Motorola Nursery Homeassistant Bridge connects compatible Motorola Nursery/5GenCare cameras
 to local RTSP clients and Home Assistant through the reconstructed Magic WEB2
 relay protocol. VM65 is the tested reference model; production code does not
 filter cameras by model name.
@@ -43,7 +43,7 @@ validated on real hardware so far.
 
 1. Add `https://github.com/Paradox101/motorola-babycam-ha-bridge` as a custom add-on
    repository.
-2. Install **Motorola Nursery Bridge**.
+2. Install **Motorola Nursery Homeassistant Bridge**.
 3. Start the add-on and open its Web UI. Enter your Motorola Nursery account
    address, then the code it emails you.
 4. Open the add-on Web UI. It is served through Home Assistant Ingress, so it

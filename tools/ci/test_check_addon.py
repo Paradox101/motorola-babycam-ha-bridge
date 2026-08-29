@@ -6,7 +6,7 @@ from check_addon import validate_addon
 
 
 VALID_CONFIG = """
-name: Motorola Nursery Bridge
+name: Motorola Nursery Homeassistant Bridge
 version: "0.2.0"
 slug: vm65_bridge
 arch: [amd64, aarch64]
@@ -82,6 +82,17 @@ class ValidateAddonTests(unittest.TestCase):
 
     def test_accepts_valid_addon(self):
         self.assertEqual([], self.validate())
+
+    def test_requires_model_neutral_public_name(self):
+        errors = self.validate(
+            VALID_CONFIG.replace(
+                "name: Motorola Nursery Homeassistant Bridge",
+                "name: Motorola VM65 Bridge",
+            )
+        )
+        self.assertIn(
+            "add-on name must be Motorola Nursery Homeassistant Bridge", errors
+        )
 
     def test_requires_both_supported_architectures(self):
         errors = self.validate(VALID_CONFIG.replace("[amd64, aarch64]", "[amd64]"))
