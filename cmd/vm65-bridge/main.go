@@ -72,7 +72,7 @@ func main() {
 		level = slog.LevelDebug
 	}
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
-	logger.Info("Motorola Nursery bridge", "version", buildinfo.String())
+	logger.Info("Motorola Nursery Homeassistant Bridge", "version", buildinfo.String())
 	logger.Debug("configuration loaded", "config", cfg.Redacted())
 
 	if err := run(cfg, logger); err != nil {
@@ -179,7 +179,7 @@ func run(cfg appconfig.Config, logger *slog.Logger) error {
 		}
 	}
 
-	logger.Info("starting Motorola Nursery bridge", "listen", cfg.ListenAddr, "cameras", len(registry.Cameras), "control_host", primary.ControlHost)
+	logger.Info("starting Motorola Nursery Homeassistant Bridge", "listen", cfg.ListenAddr, "cameras", len(registry.Cameras), "control_host", primary.ControlHost)
 	logCameraURLs(cfg, registry, logger)
 
 	// SIGHUP swaps in freshly written credentials. Cameras whose credentials did

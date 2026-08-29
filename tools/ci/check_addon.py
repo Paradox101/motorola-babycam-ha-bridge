@@ -32,6 +32,9 @@ def validate_addon(root: Path) -> list[str]:
     if not isinstance(config, dict):
         return ["config.yaml root must be a mapping"]
 
+    if config.get("name") != "Motorola Nursery Homeassistant Bridge":
+        errors.append("add-on name must be Motorola Nursery Homeassistant Bridge")
+
     architectures = set(config.get("arch") or [])
     if not REQUIRED_ARCHITECTURES.issubset(architectures):
         errors.append("arch must contain amd64 and aarch64")
@@ -119,6 +122,8 @@ def validate_addon(root: Path) -> list[str]:
     # Home Assistant's add-on security guidance asks for an AppArmor profile,
     # whose name the Supervisor matches against the slug.
     slug = str(config.get("slug") or "")
+    if slug != "vm65_bridge":
+        errors.append("add-on slug must remain vm65_bridge")
     try:
         apparmor = apparmor_path.read_text(encoding="utf-8")
     except OSError:

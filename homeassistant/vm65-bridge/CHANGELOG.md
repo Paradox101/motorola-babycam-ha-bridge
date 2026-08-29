@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.10.4
+
+### Changed
+
+- Renamed the public product to Motorola Nursery Homeassistant Bridge while
+  retaining all VM65 integration identifiers for existing installations.
+- Published model-neutral GHCR image names alongside the VM65 compatibility
+  package aliases.
+
 ## 0.10.3
 
 ### Fixed
