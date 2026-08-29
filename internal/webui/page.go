@@ -22,7 +22,7 @@ const page = `<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Motorola Nursery Bridge</title>
+<title>Motorola Nursery Homeassistant Bridge</title>
 <style>
   :root {
     color-scheme: light dark;
@@ -112,7 +112,7 @@ const page = `<!doctype html>
 <body>
 <main>
   <header>
-    <h1>Motorola Nursery Bridge</h1>
+    <h1>Motorola Nursery Homeassistant Bridge</h1>
     <span class="chip" id="version"></span>
     <span class="chip" id="media" hidden></span>
     <span class="chip" id="mqtt" hidden></span>

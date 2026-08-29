@@ -238,6 +238,9 @@ func TestThePageIsSelfContained(t *testing.T) {
 		t.Fatalf("status = %d", recorder.Code)
 	}
 	body := recorder.Body.String()
+	if !strings.Contains(body, "Motorola Nursery Homeassistant Bridge") {
+		t.Fatal("Web UI does not show the model-neutral product name")
+	}
 	for _, forbidden := range []string{"http://", "https://", "//cdn"} {
 		if strings.Contains(body, forbidden) {
 			t.Fatalf("the page loads something external: %q", forbidden)

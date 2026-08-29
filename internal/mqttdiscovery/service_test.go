@@ -164,6 +164,9 @@ func TestBridgeDiagnosticsDescribeTheRunningProcess(t *testing.T) {
 		t.Fatal("the connection sensor carries availability and can never report 'off'")
 	}
 	device := connection["device"].(map[string]any)
+	if device["name"] != "Motorola Nursery Homeassistant Bridge" {
+		t.Fatalf("device name = %v", device["name"])
+	}
 	if device["sw_version"] != "v9.9.9" || device["configuration_url"] != "http://homeassistant.local:1984" {
 		t.Fatalf("bridge device = %#v", device)
 	}

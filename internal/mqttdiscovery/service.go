@@ -136,7 +136,7 @@ func newService(config Config, factory clientFactory) *Service {
 	}
 	config.BaseTopic = strings.Trim(config.BaseTopic, "/")
 	if config.BridgeName == "" {
-		config.BridgeName = "Motorola Nursery Bridge"
+		config.BridgeName = "Motorola Nursery Homeassistant Bridge"
 	}
 	availability := config.BaseTopic + "/availability"
 	return &Service{

@@ -12,7 +12,7 @@ const page = `<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Pair Motorola Nursery Bridge</title>
+<title>Pair Motorola Nursery Homeassistant Bridge</title>
 <style>
   :root {
     color-scheme: light dark;
