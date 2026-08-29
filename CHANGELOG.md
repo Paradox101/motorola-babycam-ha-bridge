@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.10.3
+
+### Fixed
+
+- Lowercase the GitHub Container Registry owner before tagging the published
+  add-on images, as GHCR rejects mixed-case repository names.
+
 ## 0.10.2
 
 ### Fixed
