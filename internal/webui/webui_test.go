@@ -179,6 +179,17 @@ func TestMediaAndStillsAreMountedForThePlayer(t *testing.T) {
 	})
 	handler := newServer(t, &fakeSource{overview: twoCameras()}, media, stills)
 
+	// All three transports have to be reachable. WebRTC media never passes
+	// through Ingress, so a setup reached over Nabu Casa or a reverse proxy
+	// depends on MSE over the WebSocket, and MJPEG is what is left when both
+	// are blocked.
+	for _, target := range []string{
+		"/api/ws?src=vm65", "/api/stream.mjpeg?src=vm65", "/api/frame.jpeg?src=vm65",
+	} {
+		if recorder := do(handler, http.MethodGet, target, "", true); recorder.Code != http.StatusOK {
+			t.Fatalf("%s status = %d", target, recorder.Code)
+		}
+	}
 	if recorder := do(handler, http.MethodPost, "/api/webrtc?src=vm65", `{"type":"offer"}`, true); recorder.Code != http.StatusOK {
 		t.Fatalf("webrtc status = %d", recorder.Code)
 	}
@@ -191,8 +202,14 @@ func TestMediaAndStillsAreMountedForThePlayer(t *testing.T) {
 			t.Fatalf("%s status = %d, want %d", target, recorder.Code, http.StatusNotFound)
 		}
 	}
-	if len(mediaPaths) != 1 || mediaPaths[0] != "/api/webrtc" {
-		t.Fatalf("media paths = %v", mediaPaths)
+	want := []string{"/api/ws", "/api/stream.mjpeg", "/api/frame.jpeg", "/api/webrtc"}
+	if len(mediaPaths) != len(want) {
+		t.Fatalf("media paths = %v, want %v", mediaPaths, want)
+	}
+	for index, path := range want {
+		if mediaPaths[index] != path {
+			t.Fatalf("media paths = %v, want %v", mediaPaths, want)
+		}
 	}
 }
 
@@ -219,5 +236,30 @@ func TestThePageIsSelfContained(t *testing.T) {
 func TestNewServerRequiresASource(t *testing.T) {
 	if _, err := NewServer(Config{}); err == nil {
 		t.Fatal("expected a missing source to be rejected")
+	}
+}
+
+// The page is the whole player, so the transports it can fall through to are
+// worth asserting: a page that only knows WebRTC shows nothing to anyone
+// reaching Home Assistant from outside their own network.
+func TestThePageCarriesEveryTransport(t *testing.T) {
+	handler := newServer(t, &fakeSource{overview: twoCameras()}, nil, nil)
+	body := do(handler, http.MethodGet, "/", "", true).Body.String()
+	for _, needed := range []string{
+		"api/webrtc?src=", "api/ws?src=", "api/stream.mjpeg?src=",
+		"RTCPeerConnection", "MediaSource", "camera-still?src=",
+	} {
+		if !strings.Contains(body, needed) {
+			t.Fatalf("the page does not use %q", needed)
+		}
+	}
+}
+
+// A hidden tab that keeps pulling video is a bill someone else pays.
+func TestThePageStopsPlayingWhenHidden(t *testing.T) {
+	handler := newServer(t, &fakeSource{overview: twoCameras()}, nil, nil)
+	body := do(handler, http.MethodGet, "/", "", true).Body.String()
+	if !strings.Contains(body, "visibilitychange") {
+		t.Fatal("the page keeps streaming into a hidden tab")
 	}
 }

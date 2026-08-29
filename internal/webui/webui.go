@@ -128,7 +128,17 @@ func (s *Server) Handler() http.Handler {
 	if s.media != nil {
 		// go2rtc's own endpoints, for the player only. The proxy behind this
 		// still refuses anything but a read of a configured stream.
-		for _, path := range []string{"/api/webrtc", "/api/ws", "/api/frame.jpeg", "/api/stream.mp4", "/api/stream"} {
+		//
+		// All three transports are here on purpose. WebRTC media does not go
+		// through Ingress at all — the browser reaches the host's UDP port
+		// directly — so it works on the local network and not through Nabu
+		// Casa or a reverse proxy. MSE runs over the WebSocket this proxy
+		// forwards, so it works wherever the page itself loads, and MJPEG is
+		// the last resort that needs nothing but an <img>.
+		for _, path := range []string{
+			"/api/webrtc", "/api/ws", "/api/frame.jpeg",
+			"/api/stream.mp4", "/api/stream", "/api/stream.mjpeg",
+		} {
 			mux.Handle(path, s.media)
 		}
 	}
