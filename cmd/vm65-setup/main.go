@@ -39,6 +39,15 @@ type go2RTCListenConfig struct {
 	Listen string `json:"listen"`
 }
 
+// go2RTCWebRTCConfig carries the candidates go2rtc advertises. Inside a
+// container it otherwise offers only its own Docker address, which no phone or
+// laptop on the network can reach, so WebRTC negotiates successfully and then
+// never delivers a packet.
+type go2RTCWebRTCConfig struct {
+	Listen     string   `json:"listen"`
+	Candidates []string `json:"candidates,omitempty"`
+}
+
 type go2RTCLogConfig struct {
 	Level string `json:"level"`
 }
@@ -47,7 +56,7 @@ type go2RTCConfig struct {
 	Streams map[string][]string `json:"streams"`
 	API     go2RTCListenConfig  `json:"api"`
 	RTSP    go2RTCListenConfig  `json:"rtsp"`
-	WebRTC  go2RTCListenConfig  `json:"webrtc"`
+	WebRTC  go2RTCWebRTCConfig  `json:"webrtc"`
 	Log     go2RTCLogConfig     `json:"log"`
 }
 
@@ -60,9 +69,12 @@ type options struct {
 	registryPath string
 	go2RTCPath   string
 	go2RTCWebRTC bool
-	relayHost    string
-	timeout      time.Duration
-	verbose      bool
+	// webrtcCandidate is the address browsers should reach for WebRTC media,
+	// normally the Home Assistant host and the published WebRTC port.
+	webrtcCandidate string
+	relayHost       string
+	timeout         time.Duration
+	verbose         bool
 
 	// pairUI serves the pairing page until the account is paired. It is what
 	// the add-on starts instead of failing when there is no session yet.
@@ -87,6 +99,7 @@ func main() {
 	flag.StringVar(&opts.registryPath, "registry", "/data/cameras.json", "all compatible camera credentials output")
 	flag.StringVar(&opts.go2RTCPath, "go2rtc-config", "", "optional generated go2rtc configuration output")
 	flag.BoolVar(&opts.go2RTCWebRTC, "go2rtc-webrtc", true, "enable go2rtc API and WebRTC listeners")
+	flag.StringVar(&opts.webrtcCandidate, "webrtc-candidate", "", "host:port browsers use for WebRTC media, e.g. homeassistant.local:8556")
 	flag.StringVar(&opts.relayHost, "control-host", "vrelay-de0.5gen.care", "Magic relay control host")
 	flag.DurationVar(&opts.timeout, "timeout", 30*time.Second, "overall timeout for the account exchange")
 	flag.BoolVar(&opts.verbose, "v", false, "verbose protocol diagnostics (never logs credentials)")
@@ -141,7 +154,7 @@ func run(opts options) error {
 		if err != nil {
 			return err
 		}
-		if err := writeGo2RTCConfig(opts.go2RTCPath, registry, opts.go2RTCWebRTC); err != nil {
+		if err := writeGo2RTCConfig(opts.go2RTCPath, registry, opts.go2RTCWebRTC, opts.webrtcCandidate); err != nil {
 			return fmt.Errorf("write go2rtc configuration: %w", err)
 		}
 	}
@@ -316,7 +329,7 @@ func buildCameraRegistry(cameras []fivegencare.CameraCredentials) (cameraRegistr
 	return cameraRegistry{Cameras: entries}, nil
 }
 
-func writeGo2RTCConfig(path string, registry cameraRegistry, enableWebRTC bool) error {
+func writeGo2RTCConfig(path string, registry cameraRegistry, enableWebRTC bool, webrtcCandidate string) error {
 	config := go2RTCConfig{
 		Streams: make(map[string][]string, len(registry.Cameras)+1),
 		// go2rtc's API is unauthenticated and returns this very file, camera
@@ -325,11 +338,13 @@ func writeGo2RTCConfig(path string, registry cameraRegistry, enableWebRTC bool) 
 		// checking the Supervisor's ingress user header.
 		API:    go2RTCListenConfig{Listen: "127.0.0.1:1984"},
 		RTSP:   go2RTCListenConfig{Listen: ":8555"},
-		WebRTC: go2RTCListenConfig{Listen: ":8556"},
+		WebRTC: go2RTCWebRTCConfig{Listen: ":8556"},
 		Log:    go2RTCLogConfig{Level: "info"},
 	}
 	if !enableWebRTC {
 		config.WebRTC.Listen = ""
+	} else if webrtcCandidate != "" {
+		config.WebRTC.Candidates = []string{webrtcCandidate}
 	}
 	for index, camera := range registry.Cameras {
 		if camera.ListenAddr == "" {

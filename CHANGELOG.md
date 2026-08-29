@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.9.1
+
+### Fixed
+
+- **A giant orange oval covered every camera picture.** The rule meant to make
+  the video fill its frame was written as `.frame > *`, so it also stretched the
+  status badge — a pill with a 999-pixel corner radius — across the whole card.
+  Only the video and the images fill the frame now.
+- **WebRTC could never deliver a picture.** Inside a container go2rtc advertises
+  only its own Docker address, which nothing on the network can reach, so the
+  connection negotiated successfully and then carried no packets. The generated
+  configuration now advertises `stream_host` and the WebRTC port as a candidate.
+- A failed MJPEG attempt left a broken-image icon sitting over the still that
+  was perfectly good.
+
+### Added
+
+- **Each transport now says why it gave up**, on the card itself: a refused
+  websocket, a codec the browser will not take, a signalling error with its
+  status code, or a timeout with its budget. "Unavailable" on its own is not
+  something anyone can act on.
+- go2rtc's `{"type":"error"}` websocket reply is read and shown instead of
+  being waited out until the timeout.
+- Requests go2rtc refuses are logged by the add-on with the path, query and
+  status, so a player problem can be diagnosed from the add-on log rather than
+  from a phone screen.
+- MJPEG gets a longer budget than the other two, because starting an H264
+  transcode from cold is not quick.
+
 ## 0.9.0
 
 Live video that actually plays, and a Web UI worth opening.
