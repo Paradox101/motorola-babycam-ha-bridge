@@ -32,15 +32,15 @@ always also available as `vm65`; other names are derived from their Nursery app
 names. The republished RTSP URL is:
 
 ```text
-rtsp://<Home-Assistant-host>:<mapped-8555-port>/vm65
+rtsp://<stream_host>:<rtsp_port>/vm65
 ```
 
 `stream_backend: external` keeps only go2rtc's RTSP republisher and disables its
 WebRTC listener. In the Network section, map container `8555/tcp` to a free host
-port, set `external_stream_port` to that host port and point the existing media
-server at `rtsp://<stream_host>:<port>/vm65` (or another discovered stream
-name). Camera tokens remain inside the add-on. Clear the host mappings for
-`8556/tcp` and `8556/udp` if another server already uses those ports.
+port, set `rtsp_port` to that host port and point the existing media server at
+`rtsp://<stream_host>:<port>/vm65` (or another discovered stream name). Camera
+tokens remain inside the add-on. Clear the host mappings for `8556/tcp` and
+`8556/udp` if another server already uses those ports.
 
 ## Home Assistant
 
@@ -56,8 +56,13 @@ diagnostics, plus one device per camera:
 | `<camera>` Snapshot | image | A still frame, in bundled mode |
 | `<camera>` Temperature | sensor | Ambient temperature reported by supported cameras |
 
+MQTT is what publishes these entities to Home Assistant, and nothing else
+depends on it: the Web UI shows its own still images and reads each camera's
+temperature whether or not a broker is configured.
+
 If the Mosquitto add-on is installed the broker address and credentials come
-from Home Assistant automatically; fill in the `mqtt_*` options only to point at
+from Home Assistant automatically — including TLS, so a broker on port 8883
+needs no `mqtt_tls` of its own; fill in the `mqtt_*` options only to point at
 a different broker. Everything is retained and republished after a broker
 reconnect, and each camera has its own availability, so one failed camera shows
 as unavailable while the others keep working.
@@ -80,7 +85,7 @@ Home Assistant dashboard still needs one manual step:
 1. **Settings > Devices & services > Add integration > Generic Camera**.
 2. Leave the still image URL empty; the camera and image entities already cover
    stills.
-3. Set the stream source to `rtsp://<stream_host>:<mapped-8555-port>/vm65`
+3. Set the stream source to `rtsp://<stream_host>:<rtsp_port>/vm65`
    (use another stream name for the other cameras).
 4. Choose `RTSP transport: TCP`.
 
@@ -90,13 +95,18 @@ The add-on log prints the exact stream URLs on start, and the Web UI has a
 Do not copy a temporary `/api/camera_proxy/...token=...` URL into dashboard
 YAML — those tokens expire.
 
-`stream_host` is the address Home Assistant itself uses to reach the RTSP
-streams, so it must resolve **from Home Assistant**. Snapshots no longer use it:
-they are fetched from the add-on by its Supervisor hostname, which always
-resolves. The default `homeassistant.local` relies
-on mDNS, which does not resolve in every setup (some container, VLAN and Docker
-network configurations). If entities stay black, set `stream_host` to the fixed
-IP address of the Home Assistant host.
+`stream_host` is the address players and browsers use to reach the RTSP and
+WebRTC media, so it must resolve **from them**. Snapshots do not use it: they
+are fetched from the add-on by its Supervisor hostname, which always resolves.
+The default `homeassistant.local` relies on mDNS, which does not resolve in
+every setup (some container, VLAN and Docker network configurations). If
+entities stay black, set `stream_host` to the fixed IP address of the Home
+Assistant host.
+
+The Web UI checks this for you: open **Diagnostics** and it compares the
+configured `stream_host` with the address your browser actually used to reach
+the page. When they differ it says so, because that is the usual reason live
+video keeps falling back to MSE and a copied RTSP URL resolves nowhere.
 
 ## Options
 
@@ -109,29 +119,40 @@ IP address of the Home Assistant host.
 | `mqtt_discovery` | Publish Home Assistant camera discovery |
 | `mqtt_host`, `mqtt_port` | MQTT broker address |
 | `mqtt_username`, `mqtt_password` | Optional broker credentials |
+| `mqtt_tls` | Connect to the broker over TLS; detected automatically for the broker Home Assistant provides |
 | `mqtt_discovery_prefix` | Discovery prefix, normally `homeassistant` |
 | `temperature_poll_interval` | Seconds between temperature readings (10–3600, default 30) |
-| `camera_refresh_interval` | Seconds between stills pushed to the Home Assistant camera entity (5–3600, default 60; `0` publishes none and creates no camera entity) |
-| `stream_host` | Hostname advertised in MQTT RTSP URLs (not used for snapshots) |
-| `external_stream_port` | Host port advertised in external mode |
+| `camera_refresh_interval` | Seconds between stills pushed to the Home Assistant camera entity (5–3600, default 60; `0` publishes none and creates no camera entity). Every refresh pulls a frame over the relay, so a short interval is a standing cost on the connection |
+| `stream_host` | Hostname advertised for RTSP and WebRTC media (not used for snapshots) |
+| `rtsp_port` | Host port container `8555/tcp` is mapped to; it is the port in the advertised RTSP URL |
+| `webrtc_port` | Host port container `8556` is mapped to; it is the address browsers are told to use for WebRTC |
+| `external_stream_port` | Deprecated. It meant the WebRTC host port in bundled mode and the RTSP host port in external mode; `0` disables it, any other value still wins |
 | `shutdown_timeout` | Graceful child-process shutdown limit in seconds |
 | `credential_refresh_interval` | Session/device refresh interval in seconds |
 
 All version 0.2.0 option names remain valid.
+
+If you remap a media port in the Network section, set `rtsp_port` or
+`webrtc_port` to the host port you chose. Those are the numbers the add-on hands
+out — in the RTSP URL Home Assistant is told to use, and in the WebRTC candidate
+the browser is told to connect to — so a remapped port that is not reflected
+here produces an address nothing answers on.
 
 ## Ports and health
 
 | Container port | Published | Service |
 | --- | --- | --- |
 | `8099/tcp` | no | Web UI, pairing page and camera snapshots, through Ingress |
-| `8555/tcp` | yes | bundled go2rtc RTSP |
-| `8556/tcp,udp` | yes | bundled go2rtc WebRTC |
+| `8555/tcp` | yes | bundled go2rtc RTSP; tell the add-on the host port with `rtsp_port` |
+| `8556/tcp,udp` | yes | bundled go2rtc WebRTC; tell the add-on the host port with `webrtc_port` |
 | `8557/tcp` | no | `/healthz`, `/readyz`, `/status` |
 
 Only the media ports are published on the host. Everything Home Assistant itself
 uses — the Web UI, the camera snapshots and the watchdog — travels over the
 internal Supervisor network, which needs no host port and no name that resolves
-on the LAN. If a published port is occupied, change the host-side value only.
+on the LAN. If a published port is occupied, change the host-side value only —
+and set `rtsp_port` or `webrtc_port` to match, since those are the numbers the
+add-on hands out to Home Assistant and to browsers.
 
 go2rtc's own API is no longer reachable from the network at all. It binds
 container loopback, and the Web UI reaches it through the add-on, which checks
@@ -153,8 +174,28 @@ that every camera listener is up and, in bundled mode, that go2rtc answers.
 
 Every `credential_refresh_interval` seconds the add-on fetches fresh camera
 credentials and signals the bridge to adopt them. Cameras whose credentials did
-not change keep streaming, so a routine refresh no longer interrupts a live
-picture. go2rtc is not restarted.
+not change keep streaming, so a routine refresh does not interrupt a live
+picture.
+
+The media server is a separate matter. Each camera's access token lives in the
+generated go2rtc configuration, and go2rtc reads that file only when it starts,
+so a refresh that rotated the session would otherwise leave it presenting a
+token the camera no longer accepts — a stream that stops with no error anywhere.
+The add-on compares that file across a refresh and restarts go2rtc when, and
+only when, it actually changed. A refresh that changes nothing leaves the
+streams alone.
+
+You do not have to wait for the interval: **Diagnostics > Refresh credentials**
+in the Web UI runs the same thing straight away.
+
+## When the media server gets stuck
+
+go2rtc is restarted on its own with a backoff if it exits, instead of taking the
+add-on down and paying for a full credential round-trip on the way back up. If
+it is running but no camera produces a picture, **Diagnostics > Restart media
+server** restarts it in place; the relay tunnels stay up and only playback comes
+back. Repeated failures in a row do end the add-on, so the Supervisor can start
+it cleanly.
 
 ## Pairing
 
@@ -176,8 +217,13 @@ people are watching and the temperature when the camera reports one, and can
 turn sound on, go fullscreen, save a still, copy the RTSP URL, or restart just
 that camera's bridge — the repair worth having, because a tunnel that went bad
 recovers from it while every other camera keeps streaming. Click a picture to
-enlarge it and press Escape to go back; the **Diagnostics** button shows uptime,
-restarts, sessions and the media and broker links.
+enlarge it and press Escape to go back.
+
+The **Diagnostics** button shows uptime, restarts, sessions, the media and
+broker links, and the `stream_host` this add-on advertises — with a warning when
+that is not the address your browser used to reach the page. It also holds the
+two repairs that apply to everything at once: **Restart media server** and
+**Refresh credentials**.
 
 ### How live video reaches you
 
@@ -219,9 +265,10 @@ player needs. Its own interface and API are not served at all.
 
 ## Snapshots
 
-Each camera gets a `Snapshot` image entity through MQTT Discovery in bundled
-mode. Home Assistant fetches it from the add-on, which fetches a still frame
-from go2rtc and caches it.
+The Web UI shows a still on every camera card in every configuration; the
+add-on serves those itself. With `mqtt_discovery` on, each camera additionally
+gets a `Snapshot` image entity in bundled mode, which is the same picture from
+the same cache, published to Home Assistant as a URL it can fetch.
 
 The add-on serves the image itself rather than pointing Home Assistant at
 go2rtc because Home Assistant abandons an image fetch after ten seconds and
@@ -237,7 +284,7 @@ If the snapshot entity stays unavailable:
   Home Assistant through a retained MQTT message. If the broker lost its
   retained messages, restart the add-on to republish them;
 - the entity only exists in bundled mode. In external mode the media server
-  owns snapshots;
+  owns the snapshots Home Assistant sees; the Web UI still shows its own;
 - the add-on log records the reason go2rtc gave for a failed still frame.
 
 ## Privacy and backups

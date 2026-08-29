@@ -10,8 +10,10 @@ name: Motorola Nursery Bridge
 version: "0.2.0"
 slug: vm65_bridge
 arch: [amd64, aarch64]
+boot: auto
 ingress: true
 ingress_port: 8099
+ingress_stream: true
 ports:
   8099/tcp: null
   8557/tcp: null
@@ -20,6 +22,15 @@ options:
   mqtt_discovery: false
 schema:
   mqtt_discovery: bool
+"""
+
+VALID_CHANGELOG = "# Changelog\n\n## 0.2.0\n\nThe first entry.\n"
+
+VALID_TRANSLATIONS = """
+configuration:
+  mqtt_discovery:
+    name: Publish to Home Assistant over MQTT
+    description: Creates a device per camera.
 """
 
 VALID_APPARMOR = """
@@ -47,6 +58,9 @@ class ValidateAddonTests(unittest.TestCase):
         dockerfile=VALID_DOCKERFILE,
         build_yaml=None,
         apparmor=VALID_APPARMOR,
+        changelog=VALID_CHANGELOG,
+        translations=VALID_TRANSLATIONS,
+        artwork_files=("icon.png", "logo.png"),
     ):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -56,6 +70,13 @@ class ValidateAddonTests(unittest.TestCase):
                 (root / "apparmor.txt").write_text(apparmor, encoding="utf-8")
             if build_yaml is not None:
                 (root / "build.yaml").write_text(build_yaml, encoding="utf-8")
+            if changelog is not None:
+                (root / "CHANGELOG.md").write_text(changelog, encoding="utf-8")
+            if translations is not None:
+                (root / "translations").mkdir()
+                (root / "translations" / "en.yaml").write_text(translations, encoding="utf-8")
+            for artwork in artwork_files:
+                (root / artwork).write_bytes(b"\x89PNG\r\n\x1a\n")
             return validate_addon(root)
 
     def test_accepts_valid_addon(self):
@@ -148,6 +169,68 @@ class ValidateAddonTests(unittest.TestCase):
     def test_ingress_port_must_be_a_declared_container_port(self):
         errors = self.validate(VALID_CONFIG.replace("ingress_port: 8099", "ingress_port: 9999"))
         self.assertIn("ingress_port 9999 is not a declared container port", errors)
+
+    # The Supervisor buffers an ingress response unless the add-on opts out, and
+    # the Web UI's MJPEG fallback is a response that never ends.
+    def test_requires_streamed_ingress(self):
+        errors = self.validate(VALID_CONFIG.replace("ingress_stream: true", "ingress_stream: false"))
+        self.assertIn(
+            "ingress_stream must be true; the Web UI streams MJPEG and fMP4 "
+            "responses that a buffering proxy never delivers",
+            errors,
+        )
+
+    def test_requires_a_changelog_covering_the_version(self):
+        self.assertIn(
+            "CHANGELOG.md is required; the add-on page shows it as the Changelog tab",
+            self.validate(changelog=None),
+        )
+        errors = self.validate(changelog="# Changelog\n\n## 0.1.0\n")
+        self.assertIn("CHANGELOG.md does not mention version 0.2.0", errors)
+
+    def test_requires_a_translation_for_every_option(self):
+        self.assertIn(
+            "translations/en.yaml is required so options have names in the UI",
+            self.validate(translations=None),
+        )
+        errors = self.validate(translations="configuration: {}\n")
+        self.assertIn("translations/en.yaml is missing options: mqtt_discovery", errors)
+        errors = self.validate(
+            translations=VALID_TRANSLATIONS + "  gone:\n    name: Removed\n"
+        )
+        self.assertIn("translations/en.yaml describes unknown options: gone", errors)
+
+    def test_requires_store_artwork(self):
+        errors = self.validate(artwork_files=("icon.png",))
+        self.assertIn("logo.png is required; the add-on store shows it", errors)
+
+    def test_requires_starting_on_boot(self):
+        errors = self.validate(VALID_CONFIG.replace("boot: auto", "boot: manual"))
+        self.assertIn("boot must be auto so the add-on returns after a restart", errors)
+
+    # A Home Assistant base tag without a date moves under the add-on, and a
+    # bare Alpine series can sit on one that no longer gets security updates.
+    def test_requires_a_dated_home_assistant_base_tag(self):
+        errors = self.validate(
+            dockerfile=VALID_DOCKERFILE.replace(
+                "FROM example/image:1.2.3",
+                "FROM ghcr.io/home-assistant/amd64-base:3.19",
+            )
+        )
+        self.assertIn(
+            "Home Assistant base image must be pinned to a dated tag: "
+            "ghcr.io/home-assistant/amd64-base:3.19",
+            errors,
+        )
+        self.assertEqual(
+            [],
+            self.validate(
+                dockerfile=VALID_DOCKERFILE.replace(
+                    "FROM example/image:1.2.3",
+                    "FROM ghcr.io/home-assistant/amd64-base:3.24-2026.08.0",
+                )
+            ),
+        )
 
 
 if __name__ == "__main__":

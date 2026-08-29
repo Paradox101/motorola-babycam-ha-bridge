@@ -61,6 +61,12 @@ type Config struct {
 	Upstream string
 	// Streams are the go2rtc stream names that may be requested.
 	Streams []string
+	// Warm names the streams Warm pulls a first frame for. It is deliberately
+	// not Streams: that list also carries the MJPEG companions and the
+	// historical alias of the first camera, and each distinct name go2rtc is
+	// asked for opens its own RTSP session and therefore its own relay tunnel
+	// to the same camera. Empty warms nothing.
+	Warm []string
 	// Token must be presented as the `token` query parameter. Empty disables
 	// the check, which only tests do.
 	Token string
@@ -94,6 +100,7 @@ type Cache struct {
 	cfg     Config
 	guard   *netguard.Guard
 	streams map[string]bool
+	warm    []string
 	client  *http.Client
 	now     func() time.Time
 
@@ -122,6 +129,13 @@ func New(cfg Config) (*Cache, error) {
 	if len(streams) == 0 {
 		return nil, errors.New("snapshot service needs at least one stream name")
 	}
+	warm := make([]string, 0, len(cfg.Warm))
+	for _, name := range cfg.Warm {
+		if !streams[name] {
+			return nil, fmt.Errorf("snapshot warm stream %q is not one of the configured streams", name)
+		}
+		warm = append(warm, name)
+	}
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
 	}
@@ -147,7 +161,7 @@ func New(cfg Config) (*Cache, error) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Cache{
-		cfg: cfg, guard: guard, streams: streams, client: client, now: now,
+		cfg: cfg, guard: guard, streams: streams, warm: warm, client: client, now: now,
 		entries: make(map[string]*entry), ctx: ctx, cancel: cancel,
 	}, nil
 }
@@ -168,13 +182,15 @@ func (c *Cache) Token() string {
 	return c.cfg.Token
 }
 
-// Warm starts one background fetch per stream so the first dashboard that asks
-// for a thumbnail does not pay for the cold start.
+// Warm starts one background fetch per warm stream so the first dashboard that
+// asks for a thumbnail does not pay for the cold start. Only the streams named
+// in Config.Warm are pulled: every extra name is another RTSP session and
+// therefore another relay tunnel to a camera that has few to spare.
 func (c *Cache) Warm() {
 	if c == nil {
 		return
 	}
-	for name := range c.streams {
+	for _, name := range c.warm {
 		c.mu.Lock()
 		c.startLocked(name)
 		c.mu.Unlock()
@@ -373,9 +389,15 @@ func (c *Cache) fetch(source string) ([]byte, error) {
 	if contentType := response.Header.Get("Content-Type"); !strings.HasPrefix(contentType, "image/") {
 		return nil, fmt.Errorf("go2rtc returned %q instead of an image", contentType)
 	}
-	image, err := io.ReadAll(io.LimitReader(response.Body, maxImageBytes))
+	// One byte over the cap, so a frame that hit the limit is reported instead
+	// of cached: a truncated JPEG still starts with the magic bytes below, and
+	// would then be served as a valid picture for the whole StaleFor window.
+	image, err := io.ReadAll(io.LimitReader(response.Body, maxImageBytes+1))
 	if err != nil {
 		return nil, fmt.Errorf("read snapshot: %w", err)
+	}
+	if len(image) > maxImageBytes {
+		return nil, fmt.Errorf("go2rtc returned more than %d bytes for one frame", maxImageBytes)
 	}
 	if len(image) < 2 || image[0] != 0xFF || image[1] != 0xD8 {
 		return nil, errors.New("go2rtc did not return a JPEG frame")

@@ -448,3 +448,14 @@ func TestRemoveRetiresTheCameraEntityAndItsFrame(t *testing.T) {
 		}
 	}
 }
+
+// A TLS broker refuses a plain TCP client by never completing a handshake, so
+// the scheme is the whole difference between working and silently not.
+func TestBrokerURLSchemeFollowsTLS(t *testing.T) {
+	if got := brokerURL(false, "core-mosquitto", 1883); got != "tcp://core-mosquitto:1883" {
+		t.Fatalf("plain broker URL = %q", got)
+	}
+	if got := brokerURL(true, "core-mosquitto", 8883); got != "ssl://core-mosquitto:8883" {
+		t.Fatalf("TLS broker URL = %q", got)
+	}
+}

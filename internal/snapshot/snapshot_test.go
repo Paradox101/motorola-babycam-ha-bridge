@@ -270,14 +270,56 @@ func TestUpstreamFailuresAreReported(t *testing.T) {
 
 func TestWarmFillsTheCacheBeforeTheFirstRequest(t *testing.T) {
 	up := newUpstream(t)
-	cache := newCache(t, up, nil)
+	cache := newCache(t, up, func(cfg *Config) { cfg.Warm = []string{"vm65", "nursery"} })
 	cache.Warm()
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) && up.calls.Load() < 2 {
 		time.Sleep(5 * time.Millisecond)
 	}
 	if calls := up.calls.Load(); calls != 2 {
-		t.Fatalf("upstream calls = %d, want one per stream", calls)
+		t.Fatalf("upstream calls = %d, want one per warm stream", calls)
+	}
+}
+
+// Every distinct name go2rtc is asked for opens its own RTSP session, and so
+// its own relay tunnel to a camera that has few to spare. Only the streams this
+// add-on actually publishes may be warmed, never the whole allowed list.
+func TestWarmTouchesOnlyTheWarmStreams(t *testing.T) {
+	up := newUpstream(t)
+	cache := newCache(t, up, func(cfg *Config) {
+		cfg.Streams = []string{"vm65", "vm65-mjpeg", "nursery", "nursery-mjpeg"}
+		cfg.Warm = []string{"vm65"}
+	})
+	cache.Warm()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) && up.calls.Load() < 1 {
+		time.Sleep(5 * time.Millisecond)
+	}
+	time.Sleep(100 * time.Millisecond)
+	if calls := up.calls.Load(); calls != 1 {
+		t.Fatalf("upstream calls = %d, want exactly the one warm stream", calls)
+	}
+}
+
+func TestWarmingAnUnknownStreamIsRefused(t *testing.T) {
+	up := newUpstream(t)
+	_, err := New(Config{Upstream: up.server.URL, Streams: []string{"vm65"}, Warm: []string{"nursery"}})
+	if err == nil {
+		t.Fatal("New accepted a warm stream that is not configured")
+	}
+}
+
+// A frame at the size cap is a frame that was cut off. Serving it would put a
+// half JPEG in front of a camera for the whole stale window.
+func TestATruncatedFrameIsNotCached(t *testing.T) {
+	oversized := make([]byte, maxImageBytes+64)
+	oversized[0], oversized[1] = 0xFF, 0xD8
+	up := newUpstream(t)
+	up.set(0, http.StatusOK, oversized, "image/jpeg")
+	handler := newCache(t, up, nil).Handler()
+	recorder := get(handler, Path+"?src=vm65&token=secret-token")
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusServiceUnavailable)
 	}
 }
 
