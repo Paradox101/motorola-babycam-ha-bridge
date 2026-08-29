@@ -107,9 +107,21 @@ func NewHandler(cfg Config) (http.Handler, error) {
 				}
 			}
 		},
-		ErrorHandler: func(writer http.ResponseWriter, _ *http.Request, err error) {
-			cfg.Logger.Warn("web UI upstream unavailable", "err", err)
-			http.Error(writer, "web UI is not available", http.StatusBadGateway)
+		ErrorHandler: func(writer http.ResponseWriter, request *http.Request, err error) {
+			cfg.Logger.Warn("media upstream unavailable", "path", request.URL.Path, "err", err)
+			http.Error(writer, "the media server is not available", http.StatusBadGateway)
+		},
+		// A player that gets no picture is the hardest thing to diagnose from
+		// a phone, so whatever go2rtc refused is written to the add-on log
+		// where it can actually be read.
+		ModifyResponse: func(response *http.Response) error {
+			if response.StatusCode >= http.StatusBadRequest {
+				cfg.Logger.Warn("media request refused by go2rtc",
+					"path", response.Request.URL.Path,
+					"query", response.Request.URL.RawQuery,
+					"status", response.StatusCode)
+			}
+			return nil
 		},
 	}
 
