@@ -96,7 +96,12 @@ func TestStreamNamesCoverEveryCameraAndTheLegacyAlias(t *testing.T) {
 		t.Fatal(err)
 	}
 	names := streamNames(registry)
-	want := map[string]bool{"vm65": true, "room-a": true, "room-b": true}
+	// Each camera also carries the MJPEG companion stream, which the proxy has
+	// to allow or the last-resort transport is refused as an unknown stream.
+	want := map[string]bool{
+		"vm65": true, "room-a": true, "room-b": true,
+		"vm65-mjpeg": true, "room-a-mjpeg": true, "room-b-mjpeg": true,
+	}
 	if len(names) != len(want) {
 		t.Fatalf("names = %v", names)
 	}

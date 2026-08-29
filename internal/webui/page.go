@@ -274,7 +274,9 @@ const page = `<!doctype html>
     // Nothing is trusted to fail loudly: a transport that neither errors nor
     // delivers a frame is the common case, so every attempt is timed. MJPEG
     // gets longest — starting an H264 transcode from cold is not quick.
-    var budget = mode === "webrtc" ? 6000 : (mode === "mse" ? 10000 : 15000);
+    // The relay tunnel and a keyframe come before any transport can show
+    // anything, so none of these budgets is generous.
+    var budget = mode === "webrtc" ? 9000 : (mode === "mse" ? 12000 : 20000);
     this.watchdog = setTimeout(function () {
       self.next(mode, "timed out after " + Math.round(budget / 1000) + "s");
     }, budget);
@@ -407,8 +409,8 @@ const page = `<!doctype html>
       self.next("mjpeg", "stream refused");
     };
     this.parts.video.classList.add("hidden");
-    image.src = "api/stream.mjpeg?src=" + encodeURIComponent(this.parts.camera.stream) +
-      "&t=" + Date.now();
+    var stream = this.parts.camera.mjpeg_stream || this.parts.camera.stream;
+    image.src = "api/stream.mjpeg?src=" + encodeURIComponent(stream) + "&t=" + Date.now();
   };
 
   // ---- cards ------------------------------------------------------------

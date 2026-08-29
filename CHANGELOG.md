@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.9.2
+
+Live video now has a working transport. The reasons 0.9.1 printed on the card
+turned out to name three separate faults, one per transport.
+
+### Fixed
+
+- **MSE was refused with a 403 on every attempt.** go2rtc rejects a WebSocket
+  whose `Origin` is not its own host, and through Ingress the browser's origin
+  is Home Assistant, so the add-on log read
+  `websocket: request origin not allowed by Upgrader.CheckOrigin`. The proxy now
+  presents the upstream's own origin. The request has already passed this
+  add-on's authentication and its stream check by then, which is exactly what
+  Origin would have been guarding.
+- **MJPEG could never have worked.** go2rtc does not transcode for a plain
+  MJPEG request and answered
+  `codecs not matched: video:H264 => video:JPEG`. Snapshots differ — `frame.jpeg`
+  does fall back to ffmpeg — which is why stills worked while the last-resort
+  video transport did not. Each camera now gets a companion stream that
+  transcodes, and the player asks for that one.
+- **Every transport was timed out too early.** The relay tunnel has to open and
+  a keyframe has to arrive before anything can appear, and six seconds did not
+  cover it. WebRTC now gets nine, MSE twelve and MJPEG twenty.
+
 ## 0.9.1
 
 ### Fixed
