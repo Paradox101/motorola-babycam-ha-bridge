@@ -9,6 +9,7 @@ VALID_CONFIG = """
 name: Motorola Nursery Homeassistant Bridge
 version: "0.2.0"
 slug: vm65_bridge
+image: ghcr.io/paradox101/{arch}-motorola-nursery-homeassistant-bridge
 arch: [amd64, aarch64]
 boot: auto
 ingress: true
@@ -92,6 +93,13 @@ class ValidateAddonTests(unittest.TestCase):
         )
         self.assertIn(
             "add-on name must be Motorola Nursery Homeassistant Bridge", errors
+        )
+
+    def test_requires_the_model_neutral_published_image(self):
+        errors = self.validate(VALID_CONFIG.replace("image: ghcr.io/paradox101/{arch}-motorola-nursery-homeassistant-bridge\n", ""))
+        self.assertIn(
+            "image must be ghcr.io/paradox101/{arch}-motorola-nursery-homeassistant-bridge",
+            errors,
         )
 
     def test_requires_both_supported_architectures(self):

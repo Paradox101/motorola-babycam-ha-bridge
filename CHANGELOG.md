@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.10.5
+
+### Changed
+
+- The Home Assistant add-on now pulls the model-neutral published GHCR image
+  instead of building locally during installation.
+
 ## 0.10.4
 
 ### Changed
