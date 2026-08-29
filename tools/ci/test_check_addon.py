@@ -154,6 +154,13 @@ class ValidateAddonTests(unittest.TestCase):
             "apparmor profile other must match the add-on slug vm65_bridge", errors
         )
 
+    def test_requires_compatibility_slug_even_when_apparmor_matches(self):
+        errors = self.validate(
+            config=VALID_CONFIG.replace("slug: vm65_bridge", "slug: changed_slug"),
+            apparmor=VALID_APPARMOR.replace("vm65_bridge", "changed_slug"),
+        )
+        self.assertIn("add-on slug must remain vm65_bridge", errors)
+
     def test_requires_apparmor_to_execute_the_entrypoint(self):
         errors = self.validate(apparmor=VALID_APPARMOR.replace("/run.sh ix,", "/run.sh r,"))
         self.assertIn("apparmor.txt must grant /run.sh execute permission", errors)

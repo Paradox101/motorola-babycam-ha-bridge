@@ -41,3 +41,10 @@ homeassistant\\vm65-bridge`.
 
 None for Task 1. Runtime-facing display strings and release/image workflow
 changes are intentionally left for later tasks.
+
+## Reviewer follow-up
+
+Added an explicit validator invariant requiring the historical add-on slug
+`vm65_bridge`, plus a regression test that changes both the manifest slug and
+matching AppArmor profile and confirms validation fails. This closes the gap
+where the prior check only enforced consistency between those two fields.
