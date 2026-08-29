@@ -40,6 +40,7 @@ profile vm65_bridge flags=(attach_disconnected,mediate_deleted) {
   #include <abstractions/base>
   file,
   network,
+  /run.sh ix,
 }
 """
 
@@ -141,6 +142,10 @@ class ValidateAddonTests(unittest.TestCase):
         self.assertIn(
             "apparmor profile other must match the add-on slug vm65_bridge", errors
         )
+
+    def test_requires_apparmor_to_execute_the_entrypoint(self):
+        errors = self.validate(apparmor=VALID_APPARMOR.replace("/run.sh ix,", "/run.sh r,"))
+        self.assertIn("apparmor.txt must grant /run.sh execute permission", errors)
 
     def test_requires_ffmpeg_for_snapshots(self):
         errors = self.validate(

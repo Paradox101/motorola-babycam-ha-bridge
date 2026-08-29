@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.10.1
+
+### Fixed
+
+- The add-on AppArmor profile permitted `/run.sh` to be read but not executed,
+  causing S6 to exit immediately with `Permission denied` during startup.
+
 ## 0.10.0
 
 A review of the add-on itself — its packaging, its entrypoint and the options

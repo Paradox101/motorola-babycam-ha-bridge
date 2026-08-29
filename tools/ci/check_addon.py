@@ -131,6 +131,8 @@ def validate_addon(root: Path) -> list[str]:
             errors.append(
                 f"apparmor profile {profile_match.group(1)} must match the add-on slug {slug}"
             )
+        if not re.search(r"(?m)^\s*/run\.sh\s+[^,\n]*\bix\b[^,\n]*,", apparmor):
+            errors.append("apparmor.txt must grant /run.sh execute permission")
 
     # The add-on page shows this file as the Changelog tab. The repository's own
     # changelog is not it: the Supervisor only reads the add-on directory.
