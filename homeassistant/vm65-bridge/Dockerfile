@@ -29,7 +29,7 @@ RUN git clone --depth 1 --branch "${SOURCE_REF}" \
 WORKDIR /src
 # The version comes from the add-on manifest copied above. Without it the build
 # falls back to the VCS stamp of a shallow clone and every log line, MQTT device
-# and bug report says "devel+<sha>" while the add-on page says 0.10.0.
+# and bug report says "devel+<sha>" while the add-on page says 0.10.1.
 RUN set -eu; \
     version="$(sed -n 's/^version:[[:space:]]*"\{0,1\}\([^"[:space:]]*\)"\{0,1\}[[:space:]]*$/\1/p' /tmp/vm65-addon-config.yaml)"; \
     if [ -z "${version}" ]; then echo "ERROR: no version in the add-on config"; exit 1; fi; \
