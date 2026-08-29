@@ -54,6 +54,12 @@ type Config struct {
 	ClientID           string
 	OnConnectionChange func(bool)
 
+	// TLS dials the broker over TLS. Home Assistant's own broker service can
+	// report a TLS listener, and a plain TCP client against one connects and
+	// then waits forever for a handshake that never comes — which reaches the
+	// user as entities that simply never appear.
+	TLS bool
+
 	// BaseTopic roots the state topics. Zero selects DefaultBaseTopic.
 	BaseTopic string
 	// BridgeName is the device name shown in Home Assistant.
@@ -646,7 +652,7 @@ func newPahoClient(config clientConfig) *pahoClient { return &pahoClient{config:
 
 func (p *pahoClient) Start(ctx context.Context, onConnect func(), onLost func(error)) error {
 	options := mqtt.NewClientOptions()
-	options.AddBroker("tcp://" + p.config.Host + ":" + strconv.Itoa(p.config.Port))
+	options.AddBroker(brokerURL(p.config.TLS, p.config.Host, p.config.Port))
 	clientID := p.config.ClientID
 	if clientID == "" {
 		clientID = "motorola-nursery-bridge"
@@ -679,6 +685,16 @@ func (p *pahoClient) Close(quiesce uint) {
 	if p.client != nil && p.client.IsConnected() {
 		p.client.Disconnect(quiesce)
 	}
+}
+
+// brokerURL is the address paho dials. The scheme is the whole difference
+// between a working TLS broker and one that never finishes connecting.
+func brokerURL(tls bool, host string, port int) string {
+	scheme := "tcp://"
+	if tls {
+		scheme = "ssl://"
+	}
+	return scheme + host + ":" + strconv.Itoa(port)
 }
 
 func waitToken(ctx context.Context, token mqtt.Token) error {

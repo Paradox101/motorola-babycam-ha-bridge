@@ -19,6 +19,8 @@ def validate_addon(root: Path) -> list[str]:
     config_path = root / "config.yaml"
     dockerfile_path = root / "Dockerfile"
     apparmor_path = root / "apparmor.txt"
+    changelog_path = root / "CHANGELOG.md"
+    translations_path = root / "translations" / "en.yaml"
     # Home Assistant now expects build arguments in the Dockerfile itself.
     if (root / "build.yaml").exists():
         errors.append("deprecated build.yaml must be removed")
@@ -76,6 +78,15 @@ def validate_addon(root: Path) -> list[str]:
             errors.append("ingress_port must be the container port serving the Web UI")
         elif str(ingress_port) not in declared_ports:
             errors.append(f"ingress_port {ingress_port} is not a declared container port")
+        # The Web UI serves two responses that never end — the MJPEG fallback
+        # transport and progressive fMP4. The Supervisor buffers an ingress
+        # response unless this is set, which holds both open forever and
+        # delivers nothing.
+        if config.get("ingress_stream") is not True:
+            errors.append(
+                "ingress_stream must be true; the Web UI streams MJPEG and fMP4 "
+                "responses that a buffering proxy never delivers"
+            )
 
     # The watchdog reaches the add-on over the Supervisor network, so it must
     # name a container port directly. [PORT:n] resolves to a host mapping, which
@@ -121,6 +132,45 @@ def validate_addon(root: Path) -> list[str]:
                 f"apparmor profile {profile_match.group(1)} must match the add-on slug {slug}"
             )
 
+    # The add-on page shows this file as the Changelog tab. The repository's own
+    # changelog is not it: the Supervisor only reads the add-on directory.
+    version = str(config.get("version") or "")
+    try:
+        changelog = changelog_path.read_text(encoding="utf-8")
+    except OSError:
+        errors.append("CHANGELOG.md is required; the add-on page shows it as the Changelog tab")
+    else:
+        if version and version not in changelog:
+            errors.append(f"CHANGELOG.md does not mention version {version}")
+
+    # Without translations the configuration page shows the raw option keys.
+    try:
+        translations = yaml.safe_load(translations_path.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError):
+        errors.append("translations/en.yaml is required so options have names in the UI")
+    else:
+        translated = ((translations or {}).get("configuration") or {})
+        if not isinstance(translated, dict):
+            errors.append("translations/en.yaml must map configuration to option entries")
+        else:
+            missing = sorted(set(schema) - set(translated))
+            if missing:
+                errors.append(f"translations/en.yaml is missing options: {', '.join(missing)}")
+            extra = sorted(set(translated) - set(schema))
+            if extra:
+                errors.append(f"translations/en.yaml describes unknown options: {', '.join(extra)}")
+
+    # The store shows both: a square icon in the list and a wide logo on the
+    # add-on's own page.
+    for artwork in ("icon.png", "logo.png"):
+        if not (root / artwork).is_file():
+            errors.append(f"{artwork} is required; the add-on store shows it")
+
+    # A nursery camera bridge that does not come back after a Home Assistant
+    # restart is one nobody notices is gone until they need it.
+    if config.get("boot") not in (None, "auto"):
+        errors.append("boot must be auto so the add-on returns after a restart")
+
     try:
         dockerfile = dockerfile_path.read_text(encoding="utf-8")
     except OSError as error:
@@ -129,6 +179,15 @@ def validate_addon(root: Path) -> list[str]:
         for image in re.findall(r"(?im)^FROM(?:\s+--platform=\S+)?\s+(\S+)", dockerfile):
             if image.lower().endswith(":latest"):
                 errors.append(f"Dockerfile uses mutable image tag: {image}")
+            # A Home Assistant base tag without a date moves under the add-on,
+            # and a bare Alpine series can sit on one that stopped receiving
+            # security updates — for ffmpeg among other things.
+            if "home-assistant/" in image and "-base:" in image:
+                _, _, tag = image.partition("-base:")
+                if not re.fullmatch(r"\d+\.\d+-\d{4}\.\d+\.\d+", tag):
+                    errors.append(
+                        f"Home Assistant base image must be pinned to a dated tag: {image}"
+                    )
 
         # go2rtc transcodes an H264 keyframe to a snapshot JPEG with ffmpeg.
         # Only the go2rtc binary is copied out of its image, so ffmpeg has to be
