@@ -349,15 +349,20 @@ func (p *discoveryPublisher) publish(ctx context.Context, cfg appconfig.Config, 
 // go2rtc turns an unknown src into a new stream, and "exec:" is one of its
 // source schemes.
 func streamNames(registry app.Registry) []string {
-	names := make([]string, 0, len(registry.Cameras)+1)
+	names := make([]string, 0, 2*(len(registry.Cameras)+1))
 	if registry.LegacyAlias != "" {
-		names = append(names, registry.LegacyAlias)
+		names = append(names, registry.LegacyAlias, registry.LegacyAlias+mjpegSuffix)
 	}
 	for _, camera := range registry.Cameras {
-		names = append(names, camera.StreamName)
+		names = append(names, camera.StreamName, camera.StreamName+mjpegSuffix)
 	}
 	return names
 }
+
+// mjpegSuffix names the companion stream vm65-setup generates for MJPEG. It is
+// a separate stream because go2rtc refuses to transcode H264 for a plain MJPEG
+// request; the two must agree on the name.
+const mjpegSuffix = "-mjpeg"
 
 // temperatureStore keeps the last reading per camera so the Web UI can show it
 // without opening a second control link, and passes everything on to MQTT.
@@ -467,8 +472,9 @@ func (u *uiSource) Overview() webui.Overview {
 		}
 		camera := webui.Camera{
 			ID: state.ID, Name: name, Model: state.Model,
-			Stream: stream, StreamURL: u.streamURLs[state.ID],
-			Serving: state.Serving, ActiveSessions: state.ActiveSessions,
+			Stream: stream, MJPEGStream: stream + mjpegSuffix,
+			StreamURL: u.streamURLs[state.ID],
+			Serving:   state.Serving, ActiveSessions: state.ActiveSessions,
 		}
 		if celsius, ok := u.temperatures.reading(state.ID); ok {
 			value := celsius

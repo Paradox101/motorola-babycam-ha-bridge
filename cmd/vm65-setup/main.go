@@ -329,6 +329,14 @@ func buildCameraRegistry(cameras []fivegencare.CameraCredentials) (cameraRegistr
 	return cameraRegistry{Cameras: entries}, nil
 }
 
+// MJPEGSuffix names the companion stream that transcodes a camera to MJPEG.
+//
+// go2rtc does not transcode on its own for /api/stream.mjpeg: asked for one it
+// answers "codecs not matched: video:H264 => video:JPEG" and nothing plays.
+// Snapshots are different — /api/frame.jpeg does fall back to ffmpeg — which is
+// why stills worked while the last-resort video transport did not.
+const MJPEGSuffix = "-mjpeg"
+
 func writeGo2RTCConfig(path string, registry cameraRegistry, enableWebRTC bool, webrtcCandidate string) error {
 	config := go2RTCConfig{
 		Streams: make(map[string][]string, len(registry.Cameras)+1),
@@ -354,8 +362,10 @@ func writeGo2RTCConfig(path string, registry cameraRegistry, enableWebRTC bool, 
 		source := fmt.Sprintf("rtsp://%s@%s/owner/streaming?accessToken=%s#rtsp/tcp#backchannel=0",
 			userInfo, camera.ListenAddr, url.QueryEscape(camera.AccessToken))
 		config.Streams[camera.StreamName] = []string{source}
+		config.Streams[camera.StreamName+MJPEGSuffix] = []string{"ffmpeg:" + camera.StreamName + "#video=mjpeg"}
 		if index == 0 {
 			config.Streams["vm65"] = []string{source}
+			config.Streams["vm65"+MJPEGSuffix] = []string{"ffmpeg:vm65#video=mjpeg"}
 		}
 	}
 	return fivegencare.WritePrivateJSON(path, config)

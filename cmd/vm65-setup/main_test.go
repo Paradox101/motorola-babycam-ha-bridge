@@ -80,7 +80,8 @@ func TestWriteGo2RTCConfigPublishesEveryCameraAndLegacyAlias(t *testing.T) {
 	if err := json.Unmarshal(raw, &config); err != nil {
 		t.Fatalf("config is not valid JSON-compatible YAML: %v", err)
 	}
-	if len(config.Streams) != 3 || config.Streams["vm65"][0] != config.Streams["nursery"][0] {
+	// Two cameras plus the legacy alias, each with an MJPEG companion.
+	if len(config.Streams) != 6 || config.Streams["vm65"][0] != config.Streams["nursery"][0] {
 		t.Fatalf("streams = %#v", config.Streams)
 	}
 	if !strings.Contains(config.Streams["nursery"][0], "p%40ss") ||
@@ -307,5 +308,41 @@ func TestGeneratedConfigAdvertisesAReachableWebRTCCandidate(t *testing.T) {
 	}
 	if config.WebRTC.Listen != "" || len(config.WebRTC.Candidates) != 0 {
 		t.Fatalf("webrtc = %#v", config.WebRTC)
+	}
+}
+
+// go2rtc answers a /api/stream.mjpeg request for an H264 camera with
+// "codecs not matched" and plays nothing, so the last-resort transport needs a
+// stream that actually transcodes.
+func TestGeneratedConfigCarriesAnMJPEGStreamPerCamera(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "go2rtc.yaml")
+	registry := cameraRegistry{Cameras: []cameraRegistryEntry{{
+		CameraCredentials: fivegencare.CameraCredentials{DeviceUDID: "a", AccessToken: "token"},
+		StreamName:        "vm65-connect",
+		ListenAddr:        "127.0.0.1:8554",
+	}}}
+	if err := writeGo2RTCConfig(path, registry, true, ""); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var config go2RTCConfig
+	if err := json.Unmarshal(raw, &config); err != nil {
+		t.Fatal(err)
+	}
+	for name, want := range map[string]string{
+		"vm65-connect" + MJPEGSuffix: "ffmpeg:vm65-connect#video=mjpeg",
+		"vm65" + MJPEGSuffix:         "ffmpeg:vm65#video=mjpeg",
+	} {
+		sources := config.Streams[name]
+		if len(sources) != 1 || sources[0] != want {
+			t.Fatalf("stream %q = %#v, want %q", name, sources, want)
+		}
+	}
+	// The camera streams themselves must stay untouched.
+	if sources := config.Streams["vm65"]; len(sources) != 1 || !strings.HasPrefix(sources[0], "rtsp://") {
+		t.Fatalf("vm65 = %#v", sources)
 	}
 }
