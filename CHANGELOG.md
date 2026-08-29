@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.9.0
+
+Live video that actually plays, and a Web UI worth opening.
+
+### Fixed
+
+- **Live video did not work outside the local network.** The page spoke only
+  WebRTC, and WebRTC media never passes through Ingress — the browser reaches
+  the host's UDP port directly. Over Nabu Casa or a reverse proxy there was no
+  working transport at all, and the button simply failed. The player now falls
+  through three of them: WebRTC (under a second, local network), MSE over the
+  proxied WebSocket (about a second, anywhere the page loads), and MJPEG (no
+  sound, but nothing can block it). A badge says which one is carrying the
+  picture, so lag has an explanation instead of being a mystery.
+- Each attempt is timed out rather than trusted to fail loudly. A transport that
+  negotiates happily and then delivers no frames — exactly what WebRTC does when
+  its UDP port is unreachable — now falls through instead of hanging on a black
+  rectangle.
+
+### Added
+
+- Cameras start playing when the page opens, and stop when the tab is hidden, so
+  a forgotten tab does not keep pulling video over the relay.
+- Sound per camera, fullscreen, saving a still, and click-to-enlarge with Escape
+  to go back.
+- A diagnostics panel: uptime, bridge restarts, active sessions, cameras
+  serving, and the media and broker links.
+
 ## 0.8.0
 
 Cameras now appear in Home Assistant by themselves, and the Web UI is the
