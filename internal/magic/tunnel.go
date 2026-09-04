@@ -273,6 +273,29 @@ func (t *Tunnel) LocalAddr() net.Addr { return t.stream.LocalAddr() }
 // RemoteAddr reports the stream (relay) connection's remote address.
 func (t *Tunnel) RemoteAddr() net.Addr { return t.stream.RemoteAddr() }
 
+// SetKeepAlive enables TCP keepalive probes on the stream connection with the
+// given period. A relay that disappears without closing the socket is otherwise
+// indistinguishable from a camera that is simply quiet, and the session hangs.
+// A non-positive period leaves the system default in place, and a stream that
+// is not a TCP connection (tests use in-process pipes) is left alone.
+func (t *Tunnel) SetKeepAlive(period time.Duration) error {
+	if period <= 0 {
+		return nil
+	}
+	t.mu.Lock()
+	stream := t.stream
+	t.mu.Unlock()
+
+	tcp, ok := stream.(*net.TCPConn)
+	if !ok {
+		return nil
+	}
+	if err := tcp.SetKeepAlive(true); err != nil {
+		return err
+	}
+	return tcp.SetKeepAlivePeriod(period)
+}
+
 // SetDeadline sets read and write deadlines on the stream connection.
 func (t *Tunnel) SetDeadline(deadline time.Time) error { return t.stream.SetDeadline(deadline) }
 

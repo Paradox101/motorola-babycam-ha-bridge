@@ -50,7 +50,7 @@ diagnostics, plus one device per camera:
 | Entity | Kind | What it tells you |
 | --- | --- | --- |
 | Connection | binary_sensor | Whether the bridge process is connected |
-| Active sessions | sensor | How many stream sessions are open right now |
+| Active sessions | sensor | How many stream connections the media server holds open to the bridges right now — connections, not viewers |
 | Bridge restarts | sensor | How often a camera bridge had to be restarted |
 | `<camera>` Link | binary_sensor | Whether that one camera is reachable |
 | `<camera>` Snapshot | image | A still frame, in bundled mode |
@@ -213,7 +213,9 @@ outside the Supervisor network. Only administrators see the add-on panel.
 
 The Web UI is the add-on's own page, not go2rtc's. Cameras start playing live as
 soon as the page opens. Each card shows whether the relay tunnel is up, how many
-people are watching and the temperature when the camera reports one, and can
+stream connections the media server holds open to that camera's bridge (a count
+of connections, not of people: browsers talk to the media server, never to the
+bridge) and the temperature when the camera reports one, and can
 turn sound on, go fullscreen, save a still, copy the RTSP URL, or restart just
 that camera's bridge — the repair worth having, because a tunnel that went bad
 recovers from it while every other camera keeps streaming. Click a picture to
