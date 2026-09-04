@@ -125,7 +125,7 @@ const page = `<!doctype html>
     <dl>
       <div><dt>Uptime</dt><dd id="d-uptime">—</dd></div>
       <div><dt>Bridge restarts</dt><dd id="d-restarts">—</dd></div>
-      <div><dt>Active sessions</dt><dd id="d-sessions">—</dd></div>
+      <div><dt>Stream connections</dt><dd id="d-sessions">—</dd></div>
       <div><dt>Cameras serving</dt><dd id="d-serving">—</dd></div>
       <div><dt>Media server</dt><dd id="d-media">—</dd></div>
       <div><dt>MQTT</dt><dd id="d-mqtt">—</dd></div>
@@ -563,7 +563,10 @@ const page = `<!doctype html>
     parts.meta.textContent = camera.model ? camera.model + " · " + camera.stream : camera.stream;
     parts.link.innerHTML = '<span class="dot ' + (camera.serving ? "ok" : "bad") + '"></span>' +
       (camera.serving ? "Connected" : "Reconnecting");
-    parts.viewers.innerHTML = "<b>" + camera.active_sessions + "</b> watching";
+    // Not a headcount: this is how many connections the media server holds
+    // open to the bridge, which is never the number of people watching.
+    parts.viewers.innerHTML = "<b>" + camera.active_sessions + "</b> stream connection" +
+      (camera.active_sessions === 1 ? "" : "s");
     parts.temp.textContent = typeof camera.temperature_celsius === "number"
       ? camera.temperature_celsius.toFixed(1) + " °C" : "";
     if (!camera.serving && !parts.player.stopped) { parts.player.stop(); }

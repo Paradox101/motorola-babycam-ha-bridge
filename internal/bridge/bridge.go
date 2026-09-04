@@ -19,6 +19,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"os"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -29,6 +30,29 @@ import (
 // DefaultTargetPort is the camera target port observed in every measured VM65
 // live-view session.
 const DefaultTargetPort = 6667
+
+const (
+	// DefaultIdleTimeout is how long a session may go without a single byte
+	// from the camera before the bridge drops it. A live view sends video
+	// continuously, so silence this long means the far end is gone — which the
+	// sockets themselves never report when the relay disappears without
+	// closing.
+	DefaultIdleTimeout = 60 * time.Second
+
+	// DefaultKeepAlivePeriod is the TCP keepalive probe interval on the client
+	// and relay sockets. It gives the kernel a way to notice a peer that
+	// vanished, independent of whether any data was expected.
+	DefaultKeepAlivePeriod = 30 * time.Second
+
+	// DefaultMaxSessions caps concurrent client connections per camera. One
+	// camera needs a couple (the live stream plus a snapshot fetch); anything
+	// beyond that is a client retrying faster than sessions end, and admitting
+	// those only piles up relay sessions the camera has to serve.
+	DefaultMaxSessions = 8
+)
+
+// ErrIdleTimeout reports a session dropped because the camera stopped sending.
+var ErrIdleTimeout = errors.New("bridge: no data from the camera within the idle timeout")
 
 // Credentials are the per-camera values the 5GenCare control flow produces.
 // The bridge treats them as opaque inputs: it derives the magicUuid from them
@@ -82,6 +106,20 @@ type Config struct {
 	// attempt. Zero selects 1s.
 	DialBackoff time.Duration
 
+	// IdleTimeout drops a session that has gone this long without a byte from
+	// the camera. Zero selects DefaultIdleTimeout; a negative value disables
+	// the check and restores the previous behaviour of waiting forever.
+	IdleTimeout time.Duration
+
+	// KeepAlivePeriod is the TCP keepalive probe interval set on the client
+	// socket and on the relay stream socket. Zero selects
+	// DefaultKeepAlivePeriod; a negative value leaves the system default.
+	KeepAlivePeriod time.Duration
+
+	// MaxSessions caps how many client connections may be open at once. Zero
+	// selects DefaultMaxSessions; a negative value removes the cap.
+	MaxSessions int
+
 	// Logger receives structured lifecycle logs. Zero uses slog.Default.
 	Logger *slog.Logger
 
@@ -98,6 +136,9 @@ type Bridge struct {
 	dialTimeout time.Duration
 	dialRetries int
 	dialBackoff time.Duration
+	idleTimeout time.Duration
+	keepAlive   time.Duration
+	maxSessions int
 	log         *slog.Logger
 
 	listener net.Listener
@@ -138,6 +179,18 @@ func New(cfg Config) (*Bridge, error) {
 	if dialBackoff == 0 {
 		dialBackoff = time.Second
 	}
+	idleTimeout := cfg.IdleTimeout
+	if idleTimeout == 0 {
+		idleTimeout = DefaultIdleTimeout
+	}
+	keepAlive := cfg.KeepAlivePeriod
+	if keepAlive == 0 {
+		keepAlive = DefaultKeepAlivePeriod
+	}
+	maxSessions := cfg.MaxSessions
+	if maxSessions == 0 {
+		maxSessions = DefaultMaxSessions
+	}
 	log := cfg.Logger
 	if log == nil {
 		log = slog.Default()
@@ -148,6 +201,9 @@ func New(cfg Config) (*Bridge, error) {
 		dialTimeout: dialTimeout,
 		dialRetries: dialRetries,
 		dialBackoff: dialBackoff,
+		idleTimeout: idleTimeout,
+		keepAlive:   keepAlive,
+		maxSessions: maxSessions,
 		log:         log,
 		conns:       make(map[net.Conn]struct{}),
 	}, nil
@@ -255,9 +311,16 @@ func (b *Bridge) Stats() (total, active int64) {
 }
 
 func (b *Bridge) handle(ctx context.Context, client net.Conn) {
+	if !b.reserveSession() {
+		b.log.Warn("refused client: too many concurrent sessions for this camera",
+			"client", client.RemoteAddr().String(),
+			"max_sessions", b.maxSessions)
+		_ = client.Close()
+		return
+	}
 	id := atomic.AddInt64(&b.sessions, 1)
-	atomic.AddInt64(&b.active, 1)
 	b.trackConn(client, true)
+	setKeepAlive(client, b.keepAlive)
 	log := b.log.With("session", id, "client", client.RemoteAddr().String())
 	log.Info("client connected")
 
@@ -274,6 +337,9 @@ func (b *Bridge) handle(ctx context.Context, client net.Conn) {
 		return
 	}
 	defer tunnel.Close()
+	if err := tunnel.SetKeepAlive(b.keepAlive); err != nil {
+		log.Debug("could not set relay keepalive", "err", err)
+	}
 	log.Info("relay session open",
 		"stream_host", tunnel.Response.StreamHost,
 		"connection_num", tunnel.Response.ConnectionNumber,
@@ -291,8 +357,17 @@ func (b *Bridge) handle(ctx context.Context, client net.Conn) {
 		}
 	}()
 
-	fromClient, fromRelay := pipe(client, tunnel, log)
+	fromClient, fromRelay, idled := pipe(client, tunnel, b.idleTimeout, log)
 	log.Info("relay session closed", "bytes_to_relay", fromClient, "bytes_from_camera", fromRelay)
+	// An idle drop after the camera did stream is a relay or camera that went
+	// away without closing the socket. Left alone that session would block in
+	// its copy forever, hold two sockets and a goroutine, and keep counting as
+	// an active session while nobody is watching.
+	if idled && fromRelay > 0 && ctx.Err() == nil {
+		log.Warn("dropped an idle session: the camera stopped sending",
+			"idle_timeout", b.idleTimeout,
+			"bytes_from_camera", fromRelay)
+	}
 	// A session that opened but never carried a single camera byte is the exact
 	// signature of a relay session without an attached camera peer. In the wild
 	// this means the 5GenCare-authorized session is missing or expired; make
@@ -344,30 +419,110 @@ func (b *Bridge) dialWithRetry(ctx context.Context, log *slog.Logger) (*magic.Tu
 	return nil, lastErr
 }
 
-// pipe copies bytes in both directions until either side closes, then returns
+// pipe copies bytes in both directions until either side closes, then reports
 // the number of bytes carried from the client to the relay and from the relay
-// (camera) back to the client.
-func pipe(client net.Conn, tunnel *magic.Tunnel, log *slog.Logger) (fromClient, fromRelay int64) {
+// (camera) back to the client, and whether the camera direction was dropped for
+// being idle.
+//
+// The idle timeout applies to the camera direction only. A player is entitled
+// to send nothing for minutes after PLAY, but a live stream that stops arriving
+// means the far end is gone — and a relay that vanishes without closing its
+// socket produces no read error at all, so nothing else ends the session.
+func pipe(client net.Conn, tunnel *magic.Tunnel, idle time.Duration, log *slog.Logger) (fromClient, fromRelay int64, idled bool) {
 	var wg sync.WaitGroup
 	wg.Add(2)
 
-	// Each goroutine writes only its own counter, exactly once; wg.Wait below
+	// Each goroutine writes only its own results, exactly once; wg.Wait below
 	// establishes the happens-before edge for reading them.
-	copyDir := func(dst io.Writer, src io.Reader, dir string, count *int64, closeDst func()) {
+	copyDir := func(dst io.Writer, src io.Reader, dir string, timeout time.Duration, count *int64, timedOut *bool, closeDst func()) {
 		defer wg.Done()
-		n, err := io.Copy(dst, src)
+		n, err := copyIdle(dst, src, timeout)
 		*count = n
-		if err != nil && !isExpectedClose(err) {
+		if errors.Is(err, ErrIdleTimeout) {
+			*timedOut = true
+		} else if err != nil && !isExpectedClose(err) {
 			log.Debug("copy ended", "dir", dir, "err", err)
 		}
 		// Closing the destination unblocks the opposite direction's Read.
 		closeDst()
 	}
 
-	go copyDir(tunnel, client, "client->relay", &fromClient, func() { _ = tunnel.Close() })
-	go copyDir(client, tunnel, "relay->client", &fromRelay, func() { _ = client.Close() })
+	var clientIdled bool
+	go copyDir(tunnel, client, "client->relay", 0, &fromClient, &clientIdled, func() { _ = tunnel.Close() })
+	go copyDir(client, tunnel, "relay->client", idle, &fromRelay, &idled, func() { _ = client.Close() })
 	wg.Wait()
-	return fromClient, fromRelay
+	return fromClient, fromRelay, idled
+}
+
+// copyIdle copies src to dst, giving each read at most idle to produce a byte.
+// A non-positive idle, or a source that cannot take a read deadline, falls back
+// to a plain copy.
+func copyIdle(dst io.Writer, src io.Reader, idle time.Duration) (int64, error) {
+	deadliner, ok := src.(interface{ SetReadDeadline(time.Time) error })
+	if !ok || idle <= 0 {
+		return io.Copy(dst, src)
+	}
+
+	buf := make([]byte, 32*1024)
+	var total int64
+	for {
+		if err := deadliner.SetReadDeadline(time.Now().Add(idle)); err != nil {
+			return total, err
+		}
+		read, readErr := src.Read(buf)
+		if read > 0 {
+			written, writeErr := dst.Write(buf[:read])
+			total += int64(written)
+			if writeErr != nil {
+				return total, writeErr
+			}
+			if written < read {
+				return total, io.ErrShortWrite
+			}
+		}
+		if readErr != nil {
+			switch {
+			case errors.Is(readErr, os.ErrDeadlineExceeded):
+				return total, ErrIdleTimeout
+			case errors.Is(readErr, io.EOF):
+				return total, nil
+			default:
+				return total, readErr
+			}
+		}
+	}
+}
+
+// reserveSession claims one of the concurrent-session slots, reporting false
+// when the camera is already at its cap.
+func (b *Bridge) reserveSession() bool {
+	if b.maxSessions <= 0 {
+		atomic.AddInt64(&b.active, 1)
+		return true
+	}
+	for {
+		active := atomic.LoadInt64(&b.active)
+		if active >= int64(b.maxSessions) {
+			return false
+		}
+		if atomic.CompareAndSwapInt64(&b.active, active, active+1) {
+			return true
+		}
+	}
+}
+
+// setKeepAlive turns on TCP keepalive probes so a peer that disappeared without
+// closing its socket eventually surfaces as a read error instead of silence.
+func setKeepAlive(conn net.Conn, period time.Duration) {
+	if period <= 0 {
+		return
+	}
+	tcp, ok := conn.(*net.TCPConn)
+	if !ok {
+		return
+	}
+	_ = tcp.SetKeepAlive(true)
+	_ = tcp.SetKeepAlivePeriod(period)
 }
 
 func (b *Bridge) targetPort() int {

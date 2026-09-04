@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.11.0
+
+### Fixed
+
+- **Sessions that never ended.** A relay that stopped sending without closing
+  its socket left both copy loops blocked forever: the session held two sockets
+  and a goroutine, and kept counting as active. Reconnects piled new sessions on
+  top of the dead ones, which is why one camera could report a dozen. Sessions
+  now carry an idle timeout (60s without a byte from the camera) and TCP
+  keepalive on both the client and the relay socket, so a peer that disappears
+  ends the session instead of holding it open.
+- **No bound on concurrent sessions.** A client reconnecting faster than its
+  sessions ended could open relay sessions without limit. A camera now accepts
+  at most eight at once and refuses the rest with a log line naming the cap.
+
+### Changed
+
+- The Web UI says "N stream connections" instead of "N watching". The number
+  always counted the media server's connections to the bridge, never people:
+  browsers talk to the media server, and one viewer can account for several
+  connections.
+
 ## 0.10.7
 
 ### Changed

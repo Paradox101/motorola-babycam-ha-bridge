@@ -43,7 +43,9 @@ type Camera struct {
 	// Serving reports whether this camera's bridge is accepting connections
 	// right now. A camera that is restarting is not.
 	Serving bool `json:"serving"`
-	// ActiveSessions counts live viewers of this camera.
+	// ActiveSessions counts the connections currently open to this camera's
+	// bridge. That is the media server's connections, not people: one viewer
+	// can account for several, and none of them is a browser.
 	ActiveSessions int64 `json:"active_sessions"`
 	// TemperatureCelsius is the last reading, when the camera supports it.
 	TemperatureCelsius *float64 `json:"temperature_celsius,omitempty"`
