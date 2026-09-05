@@ -18,11 +18,11 @@ package webui
 // The badge on each card says which one is carrying the picture, because "it is
 // laggy" and "it is not connecting" have different answers depending on that.
 const page = `<!doctype html>
-<html lang="en">
+<html lang="%%htmlLang%%">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Motorola Nursery Homeassistant Bridge</title>
+<title>%%title%%</title>
 <style>
   :root {
     color-scheme: light dark;
@@ -112,34 +112,44 @@ const page = `<!doctype html>
 <body>
 <main>
   <header>
-    <h1>Motorola Nursery Homeassistant Bridge</h1>
+    <h1>%%title%%</h1>
     <span class="chip" id="version"></span>
     <span class="chip" id="media" hidden></span>
     <span class="chip" id="mqtt" hidden></span>
-    <button id="diag-toggle">Diagnostics</button>
+    <button id="diag-toggle">%%diagnostics%%</button>
   </header>
   <div id="message" class="note" hidden></div>
   <div class="grid" id="cameras"></div>
-  <p class="empty" id="empty" hidden>No cameras yet.</p>
+  <p class="empty" id="empty" hidden>%%noCameras%%</p>
   <section class="diag" id="diag" hidden>
     <dl>
-      <div><dt>Uptime</dt><dd id="d-uptime">—</dd></div>
-      <div><dt>Bridge restarts</dt><dd id="d-restarts">—</dd></div>
-      <div><dt>Stream connections</dt><dd id="d-sessions">—</dd></div>
-      <div><dt>Cameras serving</dt><dd id="d-serving">—</dd></div>
-      <div><dt>Media server</dt><dd id="d-media">—</dd></div>
-      <div><dt>MQTT</dt><dd id="d-mqtt">—</dd></div>
-      <div><dt>Stream host</dt><dd id="d-host">—</dd></div>
+      <div><dt>%%uptime%%</dt><dd id="d-uptime">—</dd></div>
+      <div><dt>%%bridgeRestarts%%</dt><dd id="d-restarts">—</dd></div>
+      <div><dt>%%streamConnections%%</dt><dd id="d-sessions">—</dd></div>
+      <div><dt>%%camerasServing%%</dt><dd id="d-serving">—</dd></div>
+      <div><dt>%%mediaServer%%</dt><dd id="d-media">—</dd></div>
+      <div><dt>%%mqtt%%</dt><dd id="d-mqtt">—</dd></div>
+      <div><dt>%%streamHost%%</dt><dd id="d-host">—</dd></div>
     </dl>
     <p class="hint" id="host-hint" hidden></p>
     <div class="actions">
-      <button id="media-restart" hidden>Restart media server</button>
-      <button id="creds-refresh" hidden>Refresh credentials</button>
+      <button id="media-restart" hidden>%%restartMedia%%</button>
+      <button id="creds-refresh" hidden>%%refreshCredsBtn%%</button>
     </div>
   </section>
 </main>
 <script>
 (function () {
+  // Every string this script shows comes from here, rendered into the page in
+  // the reader's language. t() fills the {placeholders} in the ones that carry
+  // a value, so a translation can put the value where its grammar wants it.
+  var T = %%strings%%;
+  function t(text, values) {
+    return String(text).replace(/\{(\w+)\}/g, function (whole, key) {
+      return values && Object.prototype.hasOwnProperty.call(values, key) ? values[key] : whole;
+    });
+  }
+
   var el = function (id) { return document.getElementById(id); };
   var cards = {};
   var focused = null;
@@ -160,9 +170,9 @@ const page = `<!doctype html>
     var days = Math.floor(seconds / 86400);
     var hours = Math.floor((seconds % 86400) / 3600);
     var minutes = Math.floor((seconds % 3600) / 60);
-    if (days) { return days + "d " + hours + "h"; }
-    if (hours) { return hours + "h " + minutes + "m"; }
-    return minutes + "m";
+    if (days) { return days + T.unitDay + " " + hours + T.unitHour; }
+    if (hours) { return hours + T.unitHour + " " + minutes + T.unitMinute; }
+    return minutes + T.unitMinute;
   }
 
   function wsURL(path) {
@@ -231,8 +241,8 @@ const page = `<!doctype html>
     this.parts.video.classList.add("hidden");
     this.parts.live.classList.add("hidden");
     this.parts.why.hidden = true;
-    this.badge("paused");
-    this.parts.play.textContent = "Watch live";
+    this.badge(T.paused);
+    this.parts.play.textContent = T.watchLive;
     this.parts.play.classList.remove("on");
   };
 
@@ -255,7 +265,7 @@ const page = `<!doctype html>
     this.mode = mode;
     this.parts.why.hidden = true;
     this.badge(mode === "mjpeg" ? "mjpeg" : mode, "live");
-    this.parts.play.textContent = "Stop";
+    this.parts.play.textContent = T.stop;
     this.parts.play.classList.add("on");
     this.parts.audio.disabled = mode === "mjpeg";
   };
@@ -264,20 +274,20 @@ const page = `<!doctype html>
   // is fixed, so a failure never loops back to something already refused.
   Player.prototype.next = function (from, reason) {
     if (this.stopped || this.mode) { return; }
-    this.note(from, reason || "no picture");
+    this.note(from, reason || T.noPicture);
     this.teardown();
     if (from === "webrtc") { this.attempt("mse"); return; }
     if (from === "mse") { this.attempt("mjpeg"); return; }
-    this.badge("unavailable", "warn");
+    this.badge(T.unavailable, "warn");
     this.showReasons();
-    this.parts.play.textContent = "Retry";
+    this.parts.play.textContent = T.retry;
     this.parts.play.classList.remove("on");
     this.stopped = true;
   };
 
   Player.prototype.attempt = function (mode) {
     if (this.stopped) { return; }
-    this.badge("connecting " + mode);
+    this.badge(t(T.connecting, { mode: mode }));
     var self = this;
     // Nothing is trusted to fail loudly: a transport that neither errors nor
     // delivers a frame is the common case, so every attempt is timed. MJPEG
@@ -286,7 +296,7 @@ const page = `<!doctype html>
     // anything, so none of these budgets is generous.
     var budget = mode === "webrtc" ? 9000 : (mode === "mse" ? 12000 : 20000);
     this.watchdog = setTimeout(function () {
-      self.next(mode, "timed out after " + Math.round(budget / 1000) + "s");
+      self.next(mode, t(T.timedOut, { seconds: Math.round(budget / 1000) }));
     }, budget);
     if (mode === "webrtc") { this.webrtc(); }
     else if (mode === "mse") { this.mse(); }
@@ -295,7 +305,7 @@ const page = `<!doctype html>
 
   Player.prototype.webrtc = function () {
     if (typeof RTCPeerConnection === "undefined") {
-      this.next("webrtc", "not supported by this browser");
+      this.next("webrtc", T.notSupported);
       return;
     }
     var self = this;
@@ -313,7 +323,7 @@ const page = `<!doctype html>
       if (pc.connectionState === "failed" || pc.connectionState === "closed") {
         // The usual cause: go2rtc advertised only its container address, so
         // nothing outside the container can reach the media port.
-        self.next("webrtc", "peer connection " + pc.connectionState);
+        self.next("webrtc", t(T.peerState, { state: pc.connectionState }));
       }
     };
     pc.createOffer().then(function (offer) {
@@ -325,19 +335,19 @@ const page = `<!doctype html>
         });
       });
     }).then(function (response) {
-      if (!response.ok) { throw new Error("signalling returned " + response.status); }
+      if (!response.ok) { throw new Error(t(T.signalling, { status: response.status })); }
       return response.json();
     }).then(function (answer) {
       if (self.pc !== pc) { return; }
       return pc.setRemoteDescription(new RTCSessionDescription(answer));
     }).catch(function (error) {
-      self.next("webrtc", (error && error.message) || "negotiation failed");
+      self.next("webrtc", (error && error.message) || T.negotiationFailed);
     });
   };
 
   Player.prototype.mse = function () {
     if (typeof MediaSource === "undefined") {
-      this.next("mse", "not supported by this browser");
+      this.next("mse", T.notSupported);
       return;
     }
     var self = this;
@@ -348,27 +358,27 @@ const page = `<!doctype html>
     ].filter(function (codec) {
       return MediaSource.isTypeSupported('video/mp4; codecs="' + codec + '"');
     });
-    if (!candidates.length) { this.next("mse", "no supported codec"); return; }
+    if (!candidates.length) { this.next("mse", T.noCodec); return; }
 
     var ws;
     try {
       ws = new WebSocket(wsURL("api/ws?src=" + encodeURIComponent(this.parts.camera.stream)));
-    } catch (e) { this.next("mse", "websocket blocked"); return; }
+    } catch (e) { this.next("mse", T.websocketBlocked); return; }
     ws.binaryType = "arraybuffer";
     this.ws = ws;
 
     var source = null, buffer = null, queue = [];
     var flush = function () {
       if (!buffer || buffer.updating || !queue.length) { return; }
-      try { buffer.appendBuffer(queue.shift()); } catch (e) { self.next("mse", "buffer rejected"); }
+      try { buffer.appendBuffer(queue.shift()); } catch (e) { self.next("mse", T.bufferRejected); }
     };
 
     ws.onopen = function () {
       ws.send(JSON.stringify({ type: "mse", value: candidates.join(",") }));
     };
-    ws.onerror = function () { self.next("mse", "websocket error"); };
+    ws.onerror = function () { self.next("mse", T.websocketError); };
     ws.onclose = function (event) {
-      if (!self.mode) { self.next("mse", "websocket closed" + (event && event.code ? " (" + event.code + ")" : "")); }
+      if (!self.mode) { self.next("mse", T.websocketClosed + (event && event.code ? " (" + event.code + ")" : "")); }
     };
     ws.onmessage = function (event) {
       if (self.ws !== ws) { return; }
@@ -377,7 +387,7 @@ const page = `<!doctype html>
         try { message = JSON.parse(event.data); } catch (e) { return; }
         // go2rtc reports a stream it cannot serve on this same socket.
         if (message.type === "error") {
-          self.next("mse", String(message.value || "refused").slice(0, 90));
+          self.next("mse", String(message.value || T.refused).slice(0, 90));
           return;
         }
         if (message.type !== "mse" || !message.value) { return; }
@@ -388,7 +398,7 @@ const page = `<!doctype html>
         source.addEventListener("sourceopen", function () {
           try {
             buffer = source.addSourceBuffer(message.value);
-          } catch (e) { self.next("mse", "codec refused: " + message.value); return; }
+          } catch (e) { self.next("mse", t(T.codecRefused, { codec: message.value })); return; }
           buffer.mode = "segments";
           buffer.addEventListener("updateend", flush);
           flush();
@@ -414,7 +424,7 @@ const page = `<!doctype html>
       // the still that was perfectly fine.
       image.classList.add("hidden");
       image.removeAttribute("src");
-      self.next("mjpeg", "stream refused");
+      self.next("mjpeg", T.streamRefused);
     };
     this.parts.video.classList.add("hidden");
     var stream = this.parts.camera.mjpeg_stream || this.parts.camera.stream;
@@ -431,7 +441,7 @@ const page = `<!doctype html>
         '<img class="still" alt="">' +
         '<img class="live hidden" alt="">' +
         '<video class="hidden" autoplay muted playsinline></video>' +
-        '<span class="badge">paused</span>' +
+        '<span class="badge">' + T.paused + '</span>' +
         '<span class="why" hidden></span>' +
       '</div>' +
       '<div class="body">' +
@@ -439,12 +449,12 @@ const page = `<!doctype html>
         '<p class="meta"></p>' +
         '<div class="stats"><span class="link"></span><span class="viewers"></span></div>' +
         '<div class="actions">' +
-          '<button class="play">Watch live</button>' +
-          '<button class="audio" disabled>Sound on</button>' +
-          '<button class="full">Fullscreen</button>' +
-          '<button class="save">Save still</button>' +
-          '<button class="copy">Copy RTSP URL</button>' +
-          '<button class="restart">Restart</button>' +
+          '<button class="play">' + T.watchLive + '</button>' +
+          '<button class="audio" disabled>' + T.soundOn + '</button>' +
+          '<button class="full">' + T.fullscreen + '</button>' +
+          '<button class="save">' + T.saveStill + '</button>' +
+          '<button class="copy">' + T.copyRTSP + '</button>' +
+          '<button class="restart">' + T.restart + '</button>' +
         '</div>' +
       '</div>';
 
@@ -483,7 +493,7 @@ const page = `<!doctype html>
     });
     parts.audio.addEventListener("click", function () {
       parts.video.muted = !parts.video.muted;
-      parts.audio.textContent = parts.video.muted ? "Sound on" : "Sound off";
+      parts.audio.textContent = parts.video.muted ? T.soundOn : T.soundOff;
       parts.audio.classList.toggle("on", !parts.video.muted);
       if (!parts.video.muted) { parts.video.play().catch(function () {}); }
     });
@@ -523,13 +533,13 @@ const page = `<!doctype html>
     var url = parts.camera.stream_url || "";
     if (!url) { return; }
     var done = function () {
-      parts.copy.textContent = "Copied";
-      setTimeout(function () { parts.copy.textContent = "Copy RTSP URL"; }, 1500);
+      parts.copy.textContent = T.copied;
+      setTimeout(function () { parts.copy.textContent = T.copyRTSP; }, 1500);
     };
     if (navigator.clipboard && navigator.clipboard.writeText) {
-      navigator.clipboard.writeText(url).then(done, function () { window.prompt("RTSP URL", url); });
+      navigator.clipboard.writeText(url).then(done, function () { window.prompt(T.rtspURL, url); });
     } else {
-      window.prompt("RTSP URL", url);
+      window.prompt(T.rtspURL, url);
     }
   }
 
@@ -541,9 +551,9 @@ const page = `<!doctype html>
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ id: parts.camera.id })
     }).then(function (response) {
-      say(response.ok ? "" : "That camera could not be restarted.");
+      say(response.ok ? "" : T.restartFailed);
     }).catch(function () {
-      say("The add-on did not answer.");
+      say(T.noAnswer);
     }).then(function () {
       setTimeout(function () { parts.restart.disabled = false; refresh(); }, 1500);
     });
@@ -562,11 +572,11 @@ const page = `<!doctype html>
     parts.name.textContent = camera.name;
     parts.meta.textContent = camera.model ? camera.model + " · " + camera.stream : camera.stream;
     parts.link.innerHTML = '<span class="dot ' + (camera.serving ? "ok" : "bad") + '"></span>' +
-      (camera.serving ? "Connected" : "Reconnecting");
+      (camera.serving ? T.connected : T.reconnecting);
     // Not a headcount: this is how many connections the media server holds
     // open to the bridge, which is never the number of people watching.
-    parts.viewers.innerHTML = "<b>" + camera.active_sessions + "</b> stream connection" +
-      (camera.active_sessions === 1 ? "" : "s");
+    parts.viewers.innerHTML = "<b>" + camera.active_sessions + "</b> " +
+      (camera.active_sessions === 1 ? T.sessionOne : T.sessionMany);
     parts.temp.textContent = typeof camera.temperature_celsius === "number"
       ? camera.temperature_celsius.toFixed(1) + " °C" : "";
     if (!camera.serving && !parts.player.stopped) { parts.player.stop(); }
@@ -578,9 +588,9 @@ const page = `<!doctype html>
       return response.json();
     }).then(function (data) {
       el("version").textContent = data.version || "";
-      chip(el("media"), data.go2rtc_ready, data.go2rtc_ready ? "Media server up" : "Media server down");
+      chip(el("media"), data.go2rtc_ready, data.go2rtc_ready ? T.mediaUp : T.mediaDown);
       if (data.mqtt_enabled) {
-        chip(el("mqtt"), data.mqtt_connected, data.mqtt_connected ? "MQTT connected" : "MQTT disconnected");
+        chip(el("mqtt"), data.mqtt_connected, data.mqtt_connected ? T.mqttConnected : T.mqttDisconnected);
       }
       var list = data.cameras || [];
       el("empty").hidden = list.length > 0;
@@ -613,17 +623,17 @@ const page = `<!doctype html>
       el("d-sessions").textContent = list.reduce(function (total, camera) {
         return total + camera.active_sessions;
       }, 0);
-      el("d-serving").textContent = serving + " of " + list.length;
-      el("d-media").textContent = data.go2rtc_ready ? "up" : "down";
-      el("d-mqtt").textContent = data.mqtt_enabled ? (data.mqtt_connected ? "connected" : "disconnected") : "off";
-      el("d-host").textContent = data.stream_host || "not set";
+      el("d-serving").textContent = t(T.servingOf, { serving: serving, total: list.length });
+      el("d-media").textContent = data.go2rtc_ready ? T.valueUp : T.valueDown;
+      el("d-mqtt").textContent = data.mqtt_enabled ? (data.mqtt_connected ? T.valueConnected : T.valueDisconnected) : T.valueOff;
+      el("d-host").textContent = data.stream_host || T.notSet;
       hostHint(data.stream_host);
       el("media-restart").hidden = !data.can_restart_media;
       el("creds-refresh").hidden = !data.can_refresh_credentials;
 
-      say(data.go2rtc_ready ? "" : "The media server is not answering, so live video and stills are unavailable.");
+      say(data.go2rtc_ready ? "" : T.mediaDownNote);
     }).catch(function () {
-      say("Could not reach the add-on.");
+      say(T.unreachable);
     });
   }
 
@@ -635,9 +645,7 @@ const page = `<!doctype html>
     var hint = el("host-hint");
     var here = location.hostname;
     if (!streamHost || !here || streamHost === here) { hint.hidden = true; return; }
-    hint.textContent = "This add-on advertises " + streamHost + " for RTSP and WebRTC, but you reached "
-      + "this page at " + here + ". If live video keeps falling back to MSE, or an RTSP URL from here "
-      + "does not resolve, set stream_host to an address your players can reach.";
+    hint.textContent = t(T.hostHint, { advertised: streamHost, here: here });
     hint.hidden = false;
   }
 
@@ -658,7 +666,7 @@ const page = `<!doctype html>
       say("");
     }).catch(function () {
       button.textContent = original;
-      say("That did not work. The add-on log has the reason.");
+      say(T.actionFailed);
     }).then(function () {
       setTimeout(function () {
         button.textContent = original;
@@ -669,10 +677,10 @@ const page = `<!doctype html>
   }
 
   el("media-restart").addEventListener("click", function () {
-    act(this, "api/media/restart", "Restarting…", "Restarting");
+    act(this, "api/media/restart", T.restarting, T.restartStarted);
   });
   el("creds-refresh").addEventListener("click", function () {
-    act(this, "api/credentials/refresh", "Refreshing…", "Refresh started");
+    act(this, "api/credentials/refresh", T.refreshing, T.refreshStarted);
   });
 
   el("diag-toggle").addEventListener("click", function () {

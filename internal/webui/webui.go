@@ -21,6 +21,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/local/motorola-vm65-bridge/internal/i18n"
 	"github.com/local/motorola-vm65-bridge/internal/ingress"
 )
 
@@ -113,6 +114,11 @@ type Config struct {
 	Media http.Handler
 	// Snapshot serves still images to the page.
 	Snapshot http.Handler
+	// Language forces the language the page is rendered in. Empty follows the
+	// browser, which is all the Supervisor gives an add-on to go on: it
+	// forwards the ingress user's identity, never the language they set in
+	// Home Assistant.
+	Language i18n.Language
 	Logger   *slog.Logger
 }
 
@@ -121,6 +127,7 @@ type Server struct {
 	authenticator *ingress.Authenticator
 	media         http.Handler
 	snapshot      http.Handler
+	language      i18n.Language
 	logger        *slog.Logger
 }
 
@@ -140,6 +147,7 @@ func NewServer(cfg Config) (*Server, error) {
 		authenticator: authenticator,
 		media:         cfg.Media,
 		snapshot:      cfg.Snapshot,
+		language:      cfg.Language,
 		logger:        cfg.Logger,
 	}, nil
 }
@@ -193,10 +201,22 @@ func (s *Server) handlePage(writer http.ResponseWriter, request *http.Request) {
 	writer.Header().Set("Content-Security-Policy",
 		"default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; "+
 			"connect-src 'self'; media-src 'self' blob:; img-src 'self' data:; form-action 'none'")
+	// The page varies by language, and the language comes from the request, so
+	// a cache in front of this must not serve one reader's language to another.
+	writer.Header().Set("Vary", "Accept-Language")
 	if request.Method == http.MethodHead {
 		return
 	}
-	_, _ = writer.Write([]byte(page))
+	_, _ = writer.Write([]byte(pageFor(s.pageLanguage(request))))
+}
+
+// pageLanguage is the configured language, or the browser's preference when
+// none is configured.
+func (s *Server) pageLanguage(request *http.Request) i18n.Language {
+	if s.language != "" {
+		return s.language
+	}
+	return i18n.Match(request.Header.Get("Accept-Language"))
 }
 
 func (s *Server) handleOverview(writer http.ResponseWriter, request *http.Request) {

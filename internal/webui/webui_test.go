@@ -11,6 +11,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/local/motorola-vm65-bridge/internal/i18n"
 	"github.com/local/motorola-vm65-bridge/internal/ingress"
 )
 
@@ -355,6 +356,82 @@ func TestTheActionsNeedAHomeAssistantSession(t *testing.T) {
 	for _, target := range []string{"/api/media/restart", "/api/credentials/refresh"} {
 		if recorder := do(handler, http.MethodPost, target, "{}", false); recorder.Code != http.StatusUnauthorized {
 			t.Fatalf("%s status = %d, want %d", target, recorder.Code, http.StatusUnauthorized)
+		}
+	}
+}
+
+// Home Assistant translates the add-on's configuration page itself, but tells
+// the add-on nothing about the language behind it. The browser does, on every
+// request, which is what this page follows unless a language is configured.
+func TestThePageFollowsTheBrowsersLanguage(t *testing.T) {
+	cases := []struct {
+		name     string
+		accept   string
+		forced   i18n.Language
+		wants    string
+		wantLang string
+	}{
+		{"a Dutch browser", "nl-NL,nl;q=0.9,en;q=0.8", "", "Live bekijken", "nl"},
+		{"an English browser", "en-GB,en;q=0.9", "", "Watch live", "en"},
+		{"a language this add-on does not speak", "de-DE", "", "Watch live", "en"},
+		{"no preference at all", "", "", "Watch live", "en"},
+		{"a configured language wins over the browser", "en-GB", i18n.Dutch, "Live bekijken", "nl"},
+		{"English can be configured against a Dutch browser", "nl-NL", i18n.English, "Watch live", "en"},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			server, err := NewServer(Config{
+				Source:   &fakeSource{overview: twoCameras()},
+				Language: testCase.forced,
+				Logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
+			})
+			if err != nil {
+				t.Fatalf("NewServer: %v", err)
+			}
+			request := httptest.NewRequest(http.MethodGet, "/", nil)
+			request.RemoteAddr = "172.30.32.2:41000"
+			request.Header.Set(ingress.UserIDHeader, "01HQ")
+			if testCase.accept != "" {
+				request.Header.Set("Accept-Language", testCase.accept)
+			}
+			recorder := httptest.NewRecorder()
+			server.Handler().ServeHTTP(recorder, request)
+
+			if recorder.Code != http.StatusOK {
+				t.Fatalf("status = %d", recorder.Code)
+			}
+			body := recorder.Body.String()
+			if !strings.Contains(body, testCase.wants) {
+				t.Fatalf("page does not contain %q", testCase.wants)
+			}
+			if !strings.Contains(body, `<html lang="`+testCase.wantLang+`">`) {
+				t.Fatalf("page is not marked up as %q", testCase.wantLang)
+			}
+			// A cache in front of this must not hand one reader's language to
+			// another.
+			if got := recorder.Header().Get("Vary"); !strings.Contains(got, "Accept-Language") {
+				t.Fatalf("Vary = %q, want it to name Accept-Language", got)
+			}
+		})
+	}
+}
+
+// A page that still carries a token, or an English label the translation
+// forgot, is the failure this check exists for. Rendering happens at start, so
+// this asserts what the binary actually holds.
+func TestEveryLanguageRendersCompletely(t *testing.T) {
+	for _, language := range i18n.Supported {
+		rendered := pageFor(language)
+		if strings.Contains(rendered, "%%") {
+			t.Fatalf("the %q page still carries a token", language)
+		}
+		for key, value := range catalogs[language] {
+			if key == "htmlLang" {
+				continue
+			}
+			if !strings.Contains(rendered, value) {
+				t.Fatalf("the %q page never uses %q (%q)", language, key, value)
+			}
 		}
 	}
 }

@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/local/motorola-vm65-bridge/internal/i18n"
 )
 
 func TestLoadDefaults(t *testing.T) {
@@ -181,5 +183,31 @@ func TestTrustedCIDRParsing(t *testing.T) {
 	}
 	if len(cfg.IngressTrustedCIDRs) != 2 || cfg.IngressTrustedCIDRs[1] != "10.0.0.0/8" {
 		t.Fatalf("trusted CIDRs = %#v", cfg.IngressTrustedCIDRs)
+	}
+}
+
+func TestLanguageDefaultsToFollowingTheBrowser(t *testing.T) {
+	cfg, err := Load(nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Language != "" {
+		t.Fatalf("language = %q, want the empty value that follows the browser", cfg.Language)
+	}
+	if !strings.Contains(cfg.Redacted(), `language="auto"`) {
+		t.Fatalf("redacted configuration does not report the language: %s", cfg.Redacted())
+	}
+}
+
+func TestLanguageIsValidatedAgainstWhatTheAddOnSpeaks(t *testing.T) {
+	cfg, err := Load([]string{"-language", "nl"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Language != i18n.Dutch {
+		t.Fatalf("language = %q, want %q", cfg.Language, i18n.Dutch)
+	}
+	if _, err := Load([]string{"-language", "de"}, nil); err == nil {
+		t.Fatal("a language this add-on does not speak was accepted")
 	}
 }

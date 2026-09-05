@@ -1,5 +1,5 @@
 name: Motorola Nursery Homeassistant Bridge
-version: "0.12.0"
+version: "0.13.0"
 slug: vm65_bridge
 image: ghcr.io/paradox101/{arch}-motorola-nursery-homeassistant-bridge
 description: Publishes compatible Motorola Nursery cameras through Magic WEB2 and optional go2rtc.
@@ -66,7 +66,12 @@ services:
   - mqtt:want
 options:
   email: ""
-  otp_code: ""
+  # The add-on's own Web UI. Home Assistant translates the page you are reading
+  # now from this add-on's translations directory, but it tells the add-on
+  # nothing about the language you set: the Supervisor forwards who is asking,
+  # not what they read. "auto" therefore follows the browser, which is right for
+  # almost everyone; the rest is for an English browser and a Dutch reader.
+  language: auto
   control_host: "vrelay-de0.5gen.care"
   stream_backend: bundled
   stream_overlay: false
@@ -87,12 +92,11 @@ options:
   # told to use and in the WebRTC candidate the browser is told to connect to.
   rtsp_port: 8555
   webrtc_port: 8556
-  external_stream_port: 0
   shutdown_timeout: 10
   credential_refresh_interval: 21600
 schema:
   email: str
-  otp_code: password
+  language: list(auto|en|nl)
   control_host: str
   stream_backend: list(bundled|external)
   stream_overlay: bool
@@ -108,6 +112,5 @@ schema:
   stream_host: str
   rtsp_port: port
   webrtc_port: port
-  external_stream_port: int(0,65535)
   shutdown_timeout: int(1,120)
   credential_refresh_interval: int(300,86400)

@@ -8,11 +8,11 @@ package pairing
 // It follows the Home Assistant frame's own colours through prefers-color-scheme
 // so it does not glare in a dark dashboard.
 const page = `<!doctype html>
-<html lang="en">
+<html lang="%%htmlLang%%">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Pair Motorola Nursery Homeassistant Bridge</title>
+<title>%%title%%</title>
 <style>
   :root {
     color-scheme: light dark;
@@ -69,33 +69,30 @@ const page = `<!doctype html>
 <body>
 <main>
   <div class="card">
-    <h1>Pair your Motorola Nursery account</h1>
-    <p class="lede">Motorola emails a one-time code. Nothing here is stored in the
-      add-on configuration, and the add-on does not need a restart.</p>
+    <h1>%%heading%%</h1>
+    <p class="lede">%%lede%%</p>
 
     <section id="step-email">
-      <label for="email">Account email</label>
+      <label for="email">%%emailLabel%%</label>
       <input id="email" type="email" autocomplete="email" inputmode="email"
              placeholder="you@example.com" autofocus>
-      <p class="hint">The address you use in the Motorola Nursery app.</p>
-      <button id="send">Send code</button>
+      <p class="hint">%%emailHint%%</p>
+      <button id="send">%%sendCode%%</button>
     </section>
 
     <section id="step-code" hidden>
-      <label for="code">Code from the email</label>
+      <label for="code">%%codeLabel%%</label>
       <input id="code" type="text" inputmode="numeric" autocomplete="one-time-code"
              placeholder="000000">
       <p class="hint" id="code-hint"></p>
       <div class="row">
-        <button id="verify">Finish pairing</button>
-        <button id="resend" class="link" type="button">Send a new code</button>
+        <button id="verify">%%finishPairing%%</button>
+        <button id="resend" class="link" type="button">%%resend%%</button>
       </div>
     </section>
 
     <section id="step-done" hidden>
-      <p class="note good"><strong>Paired.</strong> The add-on is starting your
-        cameras now. This page becomes the stream view once they are up — give it
-        a moment, then reload.</p>
+      <p class="note good"><strong>%%pairedTitle%%</strong> %%pairedBody%%</p>
     </section>
 
     <div id="message" class="note bad" hidden></div>
@@ -103,14 +100,24 @@ const page = `<!doctype html>
 
   <div class="card">
     <ol>
-      <li>Enter the email address of your Motorola Nursery account.</li>
-      <li>Open the email from Motorola and copy the code.</li>
-      <li>Paste it here. Codes expire, so request a new one if it is refused.</li>
+      <li>%%stepOne%%</li>
+      <li>%%stepTwo%%</li>
+      <li>%%stepThree%%</li>
     </ol>
   </div>
 </main>
 <script>
 (function () {
+  // Every string this script shows comes from here, rendered into the page in
+  // the reader's language. t() fills the {placeholders} in the ones that carry
+  // a value, so a translation can put the value where its grammar wants it.
+  var T = %%strings%%;
+  function t(text, values) {
+    return String(text).replace(/\{(\w+)\}/g, function (whole, key) {
+      return values && Object.prototype.hasOwnProperty.call(values, key) ? values[key] : whole;
+    });
+  }
+
   var el = function (id) { return document.getElementById(id); };
   var message = el("message");
   var pairedEmail = "";
@@ -134,8 +141,8 @@ const page = `<!doctype html>
       show("code");
       var minutes = Math.max(1, Math.round((status.code_expires_in_seconds || 0) / 60));
       el("code-hint").textContent = status.email
-        ? "Sent to " + status.email + ". Valid for about " + minutes + " more minute" + (minutes === 1 ? "" : "s") + "."
-        : "Enter the code from the email.";
+        ? t(minutes === 1 ? T.sentToOne : T.sentToMany, { email: status.email, minutes: minutes })
+        : T.enterCode;
       el("code").focus();
       return;
     }
@@ -155,10 +162,10 @@ const page = `<!doctype html>
         return { ok: response.ok, data: data };
       });
     }).then(function (result) {
-      if (!result.ok) { say(result.data.error || "Something went wrong."); return; }
+      if (!result.ok) { say(result.data.error || T.somethingWrong); return; }
       onOK(result.data);
     }).catch(function () {
-      say("The add-on did not answer. Is it still running?");
+      say(T.noAnswer);
     }).then(function () {
       button.disabled = false;
     });
@@ -166,25 +173,25 @@ const page = `<!doctype html>
 
   el("send").addEventListener("click", function () {
     var email = el("email").value.trim();
-    if (!email) { say("Enter the email address of your Motorola account."); return; }
+    if (!email) { say(T.enterEmail); return; }
     post("api/pairing/code", { email: email }, el("send"), function (status) {
       render(status);
-      say("Code sent. It can take a minute to arrive.", true);
+      say(T.codeSent, true);
     });
   });
 
   el("resend").addEventListener("click", function () {
     var email = pairedEmail || el("email").value.trim();
-    if (!email) { show("email"); say("Enter the email address of your Motorola account."); return; }
+    if (!email) { show("email"); say(T.enterEmail); return; }
     post("api/pairing/code", { email: email }, el("resend"), function (status) {
       render(status);
-      say("A new code is on its way.", true);
+      say(T.newCodeSent, true);
     });
   });
 
   el("verify").addEventListener("click", function () {
     var code = el("code").value.trim();
-    if (!code) { say("Enter the code from the email."); return; }
+    if (!code) { say(T.enterCode); return; }
     post("api/pairing/verify", { code: code }, el("verify"), function (status) {
       render(status);
       say("");
@@ -201,7 +208,7 @@ const page = `<!doctype html>
   fetch("api/pairing/status").then(function (response) {
     return response.json();
   }).then(render).catch(function () {
-    say("Could not reach the add-on.");
+    say(T.unreachable);
   });
 })();
 </script>

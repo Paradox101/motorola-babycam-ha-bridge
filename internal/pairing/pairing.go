@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/local/motorola-vm65-bridge/internal/fivegencare"
+	"github.com/local/motorola-vm65-bridge/internal/i18n"
 	"github.com/local/motorola-vm65-bridge/internal/ingress"
 )
 
@@ -45,6 +46,10 @@ type Config struct {
 	OnPaired func()
 	// RequestTimeout bounds one call to the Motorola account service.
 	RequestTimeout time.Duration
+	// Language forces the language the page and its refusals are written in.
+	// Empty follows the browser: the Supervisor tells an add-on who is asking,
+	// never which language they set in Home Assistant.
+	Language i18n.Language
 }
 
 // DefaultRequestTimeout bounds one account exchange.
@@ -55,6 +60,7 @@ type Server struct {
 	authenticator  *ingress.Authenticator
 	logger         *slog.Logger
 	requestTimeout time.Duration
+	language       i18n.Language
 
 	once     sync.Once
 	onPaired func()
@@ -79,6 +85,7 @@ func NewServer(cfg Config) (*Server, error) {
 		authenticator:  authenticator,
 		logger:         cfg.Logger,
 		requestTimeout: cfg.RequestTimeout,
+		language:       cfg.Language,
 		onPaired:       cfg.OnPaired,
 	}, nil
 }
@@ -108,10 +115,28 @@ func (s *Server) handlePage(writer http.ResponseWriter, request *http.Request) {
 	// the internet to render is one that cannot be used to fix a broken setup.
 	writer.Header().Set("Content-Security-Policy",
 		"default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; form-action 'none'")
+	// The page varies by language, and the language comes from the request, so
+	// a cache in front of this must not serve one reader's language to another.
+	writer.Header().Set("Vary", "Accept-Language")
 	if request.Method == http.MethodHead {
 		return
 	}
-	_, _ = writer.Write([]byte(page))
+	_, _ = writer.Write([]byte(pageFor(s.pageLanguage(request))))
+}
+
+// pageLanguage is the configured language, or the browser's preference when
+// none is configured.
+func (s *Server) pageLanguage(request *http.Request) i18n.Language {
+	if s.language != "" {
+		return s.language
+	}
+	return i18n.Match(request.Header.Get("Accept-Language"))
+}
+
+// say returns one message in the language of the request. The page prints what
+// this server sends verbatim, so a refusal has to arrive already translated.
+func (s *Server) say(request *http.Request, key string) string {
+	return i18n.Text(catalogs, s.pageLanguage(request), key)
 }
 
 func (s *Server) handleStatus(writer http.ResponseWriter, request *http.Request) {
@@ -122,7 +147,7 @@ func (s *Server) handleStatus(writer http.ResponseWriter, request *http.Request)
 	}
 	status, err := s.provider.Status()
 	if err != nil {
-		s.fail(writer, "Could not read the pairing state.", err, http.StatusInternalServerError)
+		s.fail(writer, s.say(request, "errState"), err, http.StatusInternalServerError)
 		return
 	}
 	writeJSON(writer, http.StatusOK, status)
@@ -141,11 +166,11 @@ func (s *Server) handleRequestCode(writer http.ResponseWriter, request *http.Req
 		// The address is the user's own and the failure is theirs to read, but
 		// the log keeps neither it nor anything derived from it.
 		s.logger.Warn("pairing code request failed", "err", err)
-		s.fail(writer, "Could not request a code. Check the address and try again.", err, http.StatusBadGateway)
+		s.fail(writer, s.say(request, "errRequestCode"), err, http.StatusBadGateway)
 		return
 	}
 	s.logger.Info("pairing code requested from the Web UI")
-	s.writeStatus(writer)
+	s.writeStatus(writer, request)
 }
 
 func (s *Server) handleVerify(writer http.ResponseWriter, request *http.Request) {
@@ -159,24 +184,24 @@ func (s *Server) handleVerify(writer http.ResponseWriter, request *http.Request)
 	defer cancel()
 	if err := s.provider.SubmitCode(ctx, body.Code); err != nil {
 		s.logger.Warn("pairing code rejected", "err", err)
-		message := "That code was not accepted. Check it and try again."
+		message := s.say(request, "errCodeWrong")
 		if errors.Is(err, fivegencare.ErrNoChallenge) {
-			message = "That code has expired. Request a new one."
+			message = s.say(request, "errCodeExpired")
 		}
 		s.fail(writer, message, err, http.StatusBadRequest)
 		return
 	}
 	s.logger.Info("account paired from the Web UI")
-	s.writeStatus(writer)
+	s.writeStatus(writer, request)
 	if s.onPaired != nil {
 		s.once.Do(func() { go s.onPaired() })
 	}
 }
 
-func (s *Server) writeStatus(writer http.ResponseWriter) {
+func (s *Server) writeStatus(writer http.ResponseWriter, request *http.Request) {
 	status, err := s.provider.Status()
 	if err != nil {
-		s.fail(writer, "Could not read the pairing state.", err, http.StatusInternalServerError)
+		s.fail(writer, s.say(request, "errState"), err, http.StatusInternalServerError)
 		return
 	}
 	writeJSON(writer, http.StatusOK, status)
@@ -199,7 +224,7 @@ func (s *Server) decode(writer http.ResponseWriter, request *http.Request, value
 	decoder := json.NewDecoder(http.MaxBytesReader(writer, request.Body, 4<<10))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(value); err != nil {
-		writeJSON(writer, http.StatusBadRequest, errorBody{Error: "The request could not be read."})
+		writeJSON(writer, http.StatusBadRequest, errorBody{Error: s.say(request, "errBadRequest")})
 		return false
 	}
 	return true

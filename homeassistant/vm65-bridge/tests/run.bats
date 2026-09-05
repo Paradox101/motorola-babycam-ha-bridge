@@ -8,6 +8,7 @@ setup() {
   # into the child shell. Set unconditionally: a ${VAR:-default} here would let
   # one test's value leak into the next.
   export TEST_BACKEND=bundled
+  export TEST_LANGUAGE=auto
   export TEST_STREAM_OVERLAY=false
   export TEST_MQTT_DISCOVERY=false
   export TEST_REFRESH_INTERVAL=60
@@ -19,7 +20,6 @@ setup() {
   export TEST_MQTT_SERVICE_SSL=false
   export TEST_RTSP_PORT=8555
   export TEST_WEBRTC_PORT=8556
-  export TEST_EXTERNAL_STREAM_PORT=0
   # run.sh writes nothing here itself, but the fakes do, and the real /data is
   # the Supervisor's mount.
   export VM65_DATA_DIR="${BATS_TEST_TMPDIR}/data"
@@ -28,7 +28,8 @@ setup() {
   bashio::config() {
     case "$1" in
       email) printf 'owner@example.test' ;;
-      otp_code|mqtt_username|mqtt_password) printf '' ;;
+      language) printf '%s' "${TEST_LANGUAGE}" ;;
+      mqtt_username|mqtt_password) printf '' ;;
       control_host) printf 'relay.example.test' ;;
       stream_backend) printf '%s' "${TEST_BACKEND}" ;;
       stream_overlay) printf '%s' "${TEST_STREAM_OVERLAY}" ;;
@@ -42,7 +43,6 @@ setup() {
       mqtt_tls) printf '%s' "${TEST_MQTT_TLS}" ;;
       rtsp_port) printf '%s' "${TEST_RTSP_PORT}" ;;
       webrtc_port) printf '%s' "${TEST_WEBRTC_PORT}" ;;
-      external_stream_port) printf '%s' "${TEST_EXTERNAL_STREAM_PORT}" ;;
       shutdown_timeout) printf '1' ;;
       credential_refresh_interval) printf '%s' "${TEST_REFRESH_INTERVAL}" ;;
     esac
@@ -103,6 +103,7 @@ setup() {
 
 @test "bundled mode generates config and supervises go2rtc" {
   export TEST_BACKEND=bundled
+  export TEST_LANGUAGE=auto
   run bash homeassistant/vm65-bridge/run.sh
   [ "$status" -eq 7 ]
   grep -q -- "-go2rtc-config ${VM65_DATA_DIR}/go2rtc.yaml" "$CALL_LOG"
@@ -120,6 +121,7 @@ setup() {
 
 @test "a failing credential run reports the pairing instruction instead of crash-looping" {
   export TEST_BACKEND=bundled
+  export TEST_LANGUAGE=auto
   printf '#!/bin/sh\nprintf "setup %%s\\n" "$*" >> "$CALL_LOG"\nexit 1\n' > "${BATS_TEST_TMPDIR}/bin/vm65-setup"
   chmod +x "${BATS_TEST_TMPDIR}/bin/vm65-setup"
   run bash homeassistant/vm65-bridge/run.sh
@@ -131,6 +133,7 @@ setup() {
 
 @test "the refresh interval reloads credentials without restarting go2rtc" {
   export TEST_BACKEND=bundled
+  export TEST_LANGUAGE=auto
   export TEST_REFRESH_INTERVAL=1
   # A bridge that stays up long enough for the refresh interval to elapse and
   # records the SIGHUP it receives.
@@ -155,6 +158,7 @@ EOF
 
 @test "MQTT settings come from Home Assistant when the service is offered" {
   export TEST_BACKEND=bundled
+  export TEST_LANGUAGE=auto
   export TEST_MQTT_DISCOVERY=true
   export TEST_MQTT_SERVICE=true
   run bash homeassistant/vm65-bridge/run.sh
@@ -168,6 +172,7 @@ EOF
 
 @test "first start serves the pairing page instead of failing" {
   export TEST_BACKEND=bundled
+  export TEST_LANGUAGE=auto
   run bash homeassistant/vm65-bridge/run.sh
   [ "$status" -eq 7 ]
   # The startup run can wait on the pairing page; the periodic refresh must not.
@@ -180,6 +185,7 @@ EOF
 
 @test "the periodic refresh never waits on the pairing page" {
   export TEST_BACKEND=bundled
+  export TEST_LANGUAGE=auto
   export TEST_REFRESH_INTERVAL=1
   cat > "${BATS_TEST_TMPDIR}/bin/vm65-bridge" <<'EOF'
 #!/bin/sh
@@ -200,6 +206,7 @@ EOF
 
 @test "go2rtc is given a WebRTC candidate browsers can reach" {
   export TEST_BACKEND=bundled
+  export TEST_LANGUAGE=auto
   run bash homeassistant/vm65-bridge/run.sh
   [ "$status" -eq 7 ]
   grep -q -- '-webrtc-candidate homeassistant.local:8556' "$CALL_LOG"
@@ -207,6 +214,7 @@ EOF
 
 @test "the Web UI listens on the ingress port rather than go2rtc" {
   export TEST_BACKEND=bundled
+  export TEST_LANGUAGE=auto
   run bash homeassistant/vm65-bridge/run.sh
   [ "$status" -eq 7 ]
   grep -q -- '-ingress 0.0.0.0:8099' "$CALL_LOG"
@@ -214,6 +222,7 @@ EOF
 
 @test "bundled mode advertises a snapshot URL on the Supervisor network" {
   export TEST_BACKEND=bundled
+  export TEST_LANGUAGE=auto
   export TEST_MQTT_DISCOVERY=true
   run bash homeassistant/vm65-bridge/run.sh
   [ "$status" -eq 7 ]
@@ -228,6 +237,7 @@ EOF
 # published over MQTT does.
 @test "still images are served without MQTT discovery" {
   export TEST_BACKEND=bundled
+  export TEST_LANGUAGE=auto
   export TEST_MQTT_DISCOVERY=false
   run bash homeassistant/vm65-bridge/run.sh
   [ "$status" -eq 7 ]
@@ -252,6 +262,7 @@ EOF
 
 @test "snapshots fall back to stream_host when the Supervisor cannot be asked" {
   export TEST_BACKEND=bundled
+  export TEST_LANGUAGE=auto
   export TEST_MQTT_DISCOVERY=true
   export TEST_ADDON_HOSTNAME=
   run bash homeassistant/vm65-bridge/run.sh
@@ -346,6 +357,7 @@ wait_for() {
 # keeps presenting a token the camera no longer accepts.
 @test "a refresh that rewrites the media configuration restarts go2rtc" {
   export TEST_BACKEND=bundled
+  export TEST_LANGUAGE=auto
   export TEST_REFRESH_INTERVAL=1
   patient_bridge
   # Each run writes a different configuration, as a rotated token would.
@@ -365,6 +377,7 @@ EOF
 # The counterpart: an unchanged configuration must leave the streams alone.
 @test "a refresh that changes nothing leaves go2rtc running" {
   export TEST_BACKEND=bundled
+  export TEST_LANGUAGE=auto
   export TEST_REFRESH_INTERVAL=1
   patient_bridge
   cat > "${BATS_TEST_TMPDIR}/bin/vm65-setup" <<'EOF'
@@ -385,6 +398,7 @@ EOF
 # credential round-trip on the way back up.
 @test "a media server that dies is restarted instead of taking the add-on down" {
   export TEST_BACKEND=bundled
+  export TEST_LANGUAGE=auto
   export TEST_REFRESH_INTERVAL=30
   patient_bridge
   # go2rtc exits straight away the first time and stays up afterwards.
@@ -412,6 +426,7 @@ EOF
 # The Web UI's refresh button reaches the bridge, which signals this process.
 @test "SIGUSR1 refreshes credentials without waiting for the interval" {
   export TEST_BACKEND=bundled
+  export TEST_LANGUAGE=auto
   export TEST_REFRESH_INTERVAL=3000
   patient_bridge
 
@@ -444,6 +459,7 @@ EOF
 # remapping 8555 on the host produced a URL nothing answers on.
 @test "the advertised RTSP port follows rtsp_port" {
   export TEST_BACKEND=bundled
+  export TEST_LANGUAGE=auto
   export TEST_RTSP_PORT=18555
   run bash homeassistant/vm65-bridge/run.sh
   [ "$status" -eq 7 ]
@@ -452,27 +468,22 @@ EOF
 
 @test "the WebRTC candidate follows webrtc_port" {
   export TEST_BACKEND=bundled
+  export TEST_LANGUAGE=auto
   export TEST_WEBRTC_PORT=18556
   run bash homeassistant/vm65-bridge/run.sh
   [ "$status" -eq 7 ]
   grep -q -- '-webrtc-candidate homeassistant.local:18556' "$CALL_LOG"
 }
 
-# Existing configurations keep working: external_stream_port still means the
-# WebRTC host port in bundled mode and the RTSP host port in external mode.
-@test "a legacy external_stream_port still wins in bundled mode" {
-  export TEST_BACKEND=bundled
-  export TEST_EXTERNAL_STREAM_PORT=28556
+@test "the Web UI language follows the browser unless the option names one" {
   run bash homeassistant/vm65-bridge/run.sh
-  [ "$status" -eq 7 ]
-  grep -q -- '-webrtc-candidate homeassistant.local:28556' "$CALL_LOG"
-  grep -q -- '-stream-url rtsp://homeassistant.local:8555/vm65' "$CALL_LOG"
+  grep -q -- "-language auto" "$CALL_LOG"
+  grep -q -- "setup .*-language auto" "$CALL_LOG"
 }
 
-@test "a legacy external_stream_port still wins in external mode" {
-  export TEST_BACKEND=external
-  export TEST_EXTERNAL_STREAM_PORT=28555
+@test "a chosen language is passed to both the pairing page and the Web UI" {
+  export TEST_LANGUAGE=nl
   run bash homeassistant/vm65-bridge/run.sh
-  [ "$status" -eq 7 ]
-  grep -q -- '-stream-url rtsp://homeassistant.local:28555/vm65' "$CALL_LOG"
+  grep -q -- "bridge .*-language nl" "$CALL_LOG"
+  grep -q -- "setup .*-language nl" "$CALL_LOG"
 }

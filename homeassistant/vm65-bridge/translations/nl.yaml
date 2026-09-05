@@ -1,0 +1,104 @@
+configuration:
+  language:
+    name: Taal van de Web UI
+    description: >-
+      De taal van de eigen pagina van deze add-on in de zijbalk. "auto" volgt je
+      browser. Home Assistant vertaalt deze instellingenpagina zelf en vertelt de
+      add-on niet welke taal je hebt gekozen, dus deze instelling is er voor een
+      browser waarvan de taal niet is wat je wilt lezen.
+  email:
+    name: E-mailadres van het account
+    description: >-
+      Het adres van je Motorola Nursery-account. Optioneel: de Web UI vraagt
+      erom tijdens het koppelen en bewaart het hier niet.
+  control_host:
+    name: Relay-controlehost
+    description: >-
+      De controlehost van de Magic-relay. Wijzig dit alleen als de ondersteuning
+      daarom vraagt.
+  stream_backend:
+    name: Streammodus
+    description: >-
+      "bundled" draait de ingebouwde mediaserver en speelt live beeld af in de
+      Web UI. "external" houdt alleen de RTSP-doorgifte over voor een
+      mediaserver die je al hebt.
+  stream_overlay:
+    name: Datum, tijd en cameranaam in het beeld branden
+    description: >-
+      Tekent een klok linksboven en de cameranaam rechtsonder, zodat elke kijker
+      en elke opname ze meekrijgt. Standaard uit: de camera kan dit niet zelf,
+      dus codeert de add-on elk beeldje opnieuw, wat rekenkracht en een beetje
+      vertraging kost op deze machine. Laat het uit tenzij je de stempel echt in
+      het beeld nodig hebt.
+  mqtt_discovery:
+    name: Publiceren naar Home Assistant via MQTT
+    description: >-
+      Maakt per camera een apparaat aan met een foto, een verbindingssensor en,
+      waar de camera dat ondersteunt, de temperatuur. Gebruikt automatisch de
+      Mosquitto-add-on als die geïnstalleerd is.
+  mqtt_host:
+    name: MQTT-brokerhost
+    description: Laat dit staan om de broker van Home Assistant te gebruiken.
+  mqtt_port:
+    name: MQTT-brokerpoort
+    description: Laat dit staan om de broker van Home Assistant te gebruiken.
+  mqtt_tls:
+    name: Via TLS met de broker verbinden
+    description: >-
+      Wordt automatisch herkend voor de broker van Home Assistant. Zet dit met
+      de hand aan voor een externe broker die alleen TLS accepteert, meestal op
+      poort 8883.
+  mqtt_username:
+    name: MQTT-gebruikersnaam
+    description: Laat leeg om de gegevens van Home Assistant te gebruiken.
+  mqtt_password:
+    name: MQTT-wachtwoord
+    description: Laat leeg om de gegevens van Home Assistant te gebruiken.
+  mqtt_discovery_prefix:
+    name: MQTT-discovery-prefix
+    description: >-
+      Normaal "homeassistant". Wijzig dit alleen als je broker een andere prefix
+      gebruikt.
+  temperature_poll_interval:
+    name: Temperatuurinterval (seconden)
+    description: >-
+      Hoe vaak aan een camera die dat ondersteunt de omgevingstemperatuur wordt
+      gevraagd.
+  camera_refresh_interval:
+    name: Interval camerabeeld (seconden)
+    description: >-
+      Hoe vaak er een stilstaand beeld naar de camera-entiteit van Home
+      Assistant wordt gestuurd. Elke verversing haalt een beeldje over de relay
+      op, dus een kort interval is een vaste belasting van de verbinding. Nul
+      stuurt er geen en maakt dus ook geen camera-entiteit aan.
+  stream_host:
+    name: Streamhost
+    description: >-
+      Het adres waarop spelers en browsers deze machine bereiken voor RTSP en
+      WebRTC. Het moet vanaf die apparaten te herleiden zijn; de standaardwaarde
+      leunt op mDNS, en dat werkt niet overal. Foto's gebruiken dit niet.
+  rtsp_port:
+    name: RTSP-poort op de host
+    description: >-
+      De hostpoort waaraan containerpoort 8555 is gekoppeld in het onderdeel
+      Netwerk. Dit is de poort in de RTSP-URL die aan Home Assistant wordt
+      doorgegeven.
+  webrtc_port:
+    name: WebRTC-poort op de host
+    description: >-
+      De hostpoort waaraan containerpoort 8556 is gekoppeld in het onderdeel
+      Netwerk. Dit is het adres waarnaar browsers verbinden voor WebRTC-beeld.
+  shutdown_timeout:
+    name: Afsluittijd (seconden)
+    description: >-
+      Hoeveel tijd onderliggende processen krijgen om te stoppen voordat ze
+      worden afgebroken.
+  credential_refresh_interval:
+    name: Vernieuwingsinterval inloggegevens (seconden)
+    description: >-
+      Hoe vaak de accountsessie en de cameragegevens worden vernieuwd. Camera's
+      waarvan de gegevens niet veranderden, blijven doorstreamen.
+network:
+  8555/tcp: RTSP-doorgifte van elke camera
+  8556/tcp: WebRTC-beeld (TCP)
+  8556/udp: WebRTC-beeld (UDP)

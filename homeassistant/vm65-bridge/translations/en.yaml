@@ -1,14 +1,16 @@
 configuration:
+  language:
+    name: Web UI language
+    description: >-
+      The language of this add-on's own page in the sidebar. "auto" follows your
+      browser. Home Assistant translates this configuration page itself and does
+      not tell the add-on which language you chose, so this is the setting for a
+      browser whose language is not the one you want to read.
   email:
     name: Account email
     description: >-
       Motorola Nursery account address. Optional: the Web UI asks for it during
       pairing and does not store it here.
-  otp_code:
-    name: Pairing code
-    description: >-
-      Legacy unattended pairing code. Leave empty and pair from the Web UI; a
-      code entered there is never written to this configuration.
   control_host:
     name: Relay control host
     description: Magic relay control host. Change only if support tells you to.
@@ -78,11 +80,6 @@ configuration:
     description: >-
       The host port container port 8556 is mapped to in the Network section.
       This is the address browsers are told to connect to for WebRTC media.
-  external_stream_port:
-    name: Legacy stream port (deprecated)
-    description: >-
-      Superseded by the RTSP and WebRTC host ports. Zero means unused; any other
-      value still wins, so existing configurations keep working.
   shutdown_timeout:
     name: Shutdown timeout (seconds)
     description: How long child processes get to stop before they are forced.

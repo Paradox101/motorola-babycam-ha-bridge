@@ -155,22 +155,33 @@ def validate_addon(root: Path) -> list[str]:
         if version and version not in changelog:
             errors.append(f"CHANGELOG.md does not mention version {version}")
 
-    # Without translations the configuration page shows the raw option keys.
-    try:
-        translations = yaml.safe_load(translations_path.read_text(encoding="utf-8"))
-    except (OSError, yaml.YAMLError):
+    # Without translations the configuration page shows the raw option keys, and
+    # a translation that has drifted shows them for the options it forgot. Every
+    # language the add-on ships is held to the same schema, not just English:
+    # the Supervisor picks one by the reader's language, so an incomplete one is
+    # a half-translated page for whoever it was added for.
+    if not translations_path.is_file():
         errors.append("translations/en.yaml is required so options have names in the UI")
-    else:
+    for path in sorted((root / "translations").glob("*.yaml")):
+        name = f"translations/{path.name}"
+        try:
+            translations = yaml.safe_load(path.read_text(encoding="utf-8"))
+        except (OSError, yaml.YAMLError) as error:
+            errors.append(f"cannot parse {name}: {error}")
+            continue
         translated = ((translations or {}).get("configuration") or {})
         if not isinstance(translated, dict):
-            errors.append("translations/en.yaml must map configuration to option entries")
-        else:
-            missing = sorted(set(schema) - set(translated))
-            if missing:
-                errors.append(f"translations/en.yaml is missing options: {', '.join(missing)}")
-            extra = sorted(set(translated) - set(schema))
-            if extra:
-                errors.append(f"translations/en.yaml describes unknown options: {', '.join(extra)}")
+            errors.append(f"{name} must map configuration to option entries")
+            continue
+        missing = sorted(set(schema) - set(translated))
+        if missing:
+            errors.append(f"{name} is missing options: {', '.join(missing)}")
+        extra = sorted(set(translated) - set(schema))
+        if extra:
+            errors.append(f"{name} describes unknown options: {', '.join(extra)}")
+        for option, entry in sorted(translated.items()):
+            if not isinstance(entry, dict) or not str(entry.get("name") or "").strip():
+                errors.append(f"{name} option {option} has no name")
 
     # The store shows both: a square icon in the list and a wide logo on the
     # add-on's own page.

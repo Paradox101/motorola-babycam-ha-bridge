@@ -42,7 +42,7 @@ In `external` mode, go2rtc remains as an internal RTSP republisher so camera
 tokens never need to leave the add-on. Its WebRTC listener is disabled. Map
 container RTSP port `8555` to a free host port and let the existing media server
 consume `rtsp://<host>:<port>/<stream-name>`. MQTT Discovery advertises the
-`stream_host` and `external_stream_port` settings.
+`stream_host` and `rtsp_port` settings.
 
 ## Control and state
 

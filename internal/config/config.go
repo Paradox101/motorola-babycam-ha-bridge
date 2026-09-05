@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/local/motorola-vm65-bridge/internal/i18n"
 )
 
 // MQTT contains optional Home Assistant discovery broker settings.
@@ -65,6 +67,11 @@ type Config struct {
 	// AllowMediaRestart offers the Web UI's "restart media server" action,
 	// which asks the bundled go2rtc to restart itself.
 	AllowMediaRestart bool
+	// Language forces the language of the add-on's own Web UI. Empty follows
+	// the browser, which is the only preference the Supervisor passes an
+	// add-on: it forwards who is asking, never the language they chose in Home
+	// Assistant.
+	Language i18n.Language
 }
 
 // Load parses command-line arguments, applies secret environment overrides,
@@ -100,10 +107,17 @@ func Load(args []string, lookupEnv func(string) (string, bool)) (Config, error) 
 	flags.DurationVar(&cfg.CameraRefreshInterval, "camera-refresh-interval", 0, "how often to push a still frame to the Home Assistant camera entity; zero publishes none")
 	flags.BoolVar(&cfg.AllowCredentialRefresh, "allow-credential-refresh", false, "offer the Web UI action that asks the supervising entrypoint for a credential refresh")
 	flags.BoolVar(&cfg.AllowMediaRestart, "allow-media-restart", false, "offer the Web UI action that restarts the bundled media server")
+	var language string
+	flags.StringVar(&language, "language", i18n.Auto, "language of the add-on Web UI: "+strings.Join(i18n.Options(), ", "))
 	if err := flags.Parse(args); err != nil {
 		return Config{}, fmt.Errorf("parse configuration: %w", err)
 	}
 
+	parsedLanguage, ok := i18n.ParseOption(language)
+	if !ok {
+		return Config{}, fmt.Errorf("language must be one of %s", strings.Join(i18n.Options(), ", "))
+	}
+	cfg.Language = parsedLanguage
 	cfg.IngressTrustedCIDRs = parseTrustedCIDRs(trustedCIDRs)
 	cfg.MQTT.Password = legacyMQTTPassword
 	if lookupEnv != nil {
@@ -233,7 +247,7 @@ func validateAddress(name, address string) error {
 // Redacted returns a log-safe configuration summary.
 func (c Config) Redacted() string {
 	return fmt.Sprintf(
-		"listen=%q status=%q credentials=%q registry=%q mqtt_host=%q mqtt_port=%d mqtt_tls=%t mqtt_user_set=%t mqtt_password_set=%t stream_url=%q snapshot_base=%q ingress=%q go2rtc_required=%t go2rtc_url=%q shutdown_timeout=%s temperature_poll_interval=%s camera_refresh_interval=%s",
+		"listen=%q status=%q credentials=%q registry=%q mqtt_host=%q mqtt_port=%d mqtt_tls=%t mqtt_user_set=%t mqtt_password_set=%t stream_url=%q snapshot_base=%q ingress=%q go2rtc_required=%t go2rtc_url=%q shutdown_timeout=%s temperature_poll_interval=%s camera_refresh_interval=%s language=%q",
 		c.ListenAddr,
 		c.StatusAddr,
 		c.CredentialsPath,
@@ -251,5 +265,15 @@ func (c Config) Redacted() string {
 		c.ShutdownTimeout,
 		c.TemperaturePollInterval,
 		c.CameraRefreshInterval,
+		languageOption(c.Language),
 	)
+}
+
+// languageOption reports the configured language the way it was given, so a
+// redacted log line says "auto" rather than an empty string.
+func languageOption(language i18n.Language) string {
+	if language == "" {
+		return i18n.Auto
+	}
+	return string(language)
 }

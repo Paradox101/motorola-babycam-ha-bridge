@@ -30,7 +30,7 @@ MEDIA_FAILURES_MAX=5
 REFRESH_REQUESTED=false
 
 EMAIL=$(bashio::config 'email')
-OTP_CODE=$(bashio::config 'otp_code')
+LANGUAGE=$(bashio::config 'language')
 CONTROL_HOST=$(bashio::config 'control_host')
 STREAM_BACKEND=$(bashio::config 'stream_backend')
 MQTT_DISCOVERY=$(bashio::config 'mqtt_discovery')
@@ -45,7 +45,6 @@ CAMERA_REFRESH_INTERVAL=$(bashio::config 'camera_refresh_interval')
 STREAM_HOST=$(bashio::config 'stream_host')
 RTSP_PORT=$(bashio::config 'rtsp_port')
 WEBRTC_PORT=$(bashio::config 'webrtc_port')
-EXTERNAL_STREAM_PORT=$(bashio::config 'external_stream_port')
 SHUTDOWN_TIMEOUT=$(bashio::config 'shutdown_timeout')
 CREDENTIAL_REFRESH_INTERVAL=$(bashio::config 'credential_refresh_interval')
 STREAM_OVERLAY=$(bashio::config 'stream_overlay')
@@ -105,19 +104,6 @@ if [[ "${MQTT_DISCOVERY}" == "true" ]] && bashio::services.available "mqtt"; the
   bashio::log.info "Using the MQTT broker provided by Home Assistant (${MQTT_HOST}:${MQTT_PORT}, tls=${MQTT_TLS})"
 fi
 
-# external_stream_port used to mean two different things: the RTSP host port in
-# external mode and the WebRTC host port in bundled mode. It is superseded by
-# rtsp_port and webrtc_port, which mean the same thing in both modes — but a
-# configuration that still sets it keeps working, and keeps winning.
-if [[ -n "${EXTERNAL_STREAM_PORT}" ]] && (( EXTERNAL_STREAM_PORT > 0 )); then
-  if [[ "${STREAM_BACKEND}" == "external" ]]; then
-    RTSP_PORT="${EXTERNAL_STREAM_PORT}"
-  else
-    WEBRTC_PORT="${EXTERNAL_STREAM_PORT}"
-  fi
-  bashio::log.warning "external_stream_port is deprecated; use rtsp_port and webrtc_port instead"
-fi
-
 # Home Assistant fetches camera snapshots by the add-on's hostname on the
 # Supervisor network. That name is assigned by the Supervisor, always resolves
 # from Home Assistant, and needs no published port — unlike stream_host, which
@@ -127,6 +113,13 @@ ADDON_HOSTNAME=$(bashio::addon.hostname 2>/dev/null || true)
 if [[ -z "${ADDON_HOSTNAME}" || "${ADDON_HOSTNAME}" == "null" ]]; then
   ADDON_HOSTNAME="${STREAM_HOST}"
   bashio::log.warning "Could not read this add-on's hostname; snapshots will use ${STREAM_HOST}"
+fi
+
+# The add-on's own pages follow the browser unless the option names a language.
+# Home Assistant translates the options page itself but tells the add-on nothing
+# about the language behind it, so "auto" is the only honest default.
+if [[ -z "${LANGUAGE}" || "${LANGUAGE}" == "null" ]]; then
+  LANGUAGE=auto
 fi
 
 if [[ -z "${CONTROL_HOST}" ]]; then
@@ -148,7 +141,6 @@ if [[ "${MQTT_DISCOVERY}" == "true" && -z "${MQTT_PREFIX}" ]]; then
   bashio::exit.nok "mqtt_discovery_prefix is required when mqtt_discovery is enabled"
 fi
 
-export VM65_OTP_CODE="${OTP_CODE}"
 export VM65_MQTT_PASSWORD="${MQTT_PASSWORD}"
 
 # go2rtc_config_hash fingerprints the generated media server configuration. The
@@ -179,6 +171,7 @@ load_credentials() {
   # A code is sent because someone pressed the button in the Web UI, not
   # because the add-on restarted.
   setup_args+=( -request-code=false )
+  setup_args+=( -language "${LANGUAGE}" )
   if [[ "${STREAM_BACKEND}" == "external" ]]; then
     setup_args+=( -go2rtc-webrtc=false )
   fi
@@ -324,6 +317,7 @@ BRIDGE_ARGS+=( -snapshot-token-file "${SNAPSHOT_TOKEN}" )
 # Both repairs the Web UI offers are handled here: go2rtc is restarted through
 # its loopback API, and a credential refresh arrives as SIGUSR1.
 BRIDGE_ARGS+=( -allow-media-restart -allow-credential-refresh )
+BRIDGE_ARGS+=( -language "${LANGUAGE}" )
 if [[ "${MQTT_DISCOVERY}" == "true" ]]; then
   BRIDGE_ARGS+=( -mqtt-host "${MQTT_HOST}" -mqtt-port "${MQTT_PORT}" -mqtt-username "${MQTT_USERNAME}" -mqtt-discovery-prefix "${MQTT_PREFIX}" -temperature-poll-interval "${TEMPERATURE_POLL_INTERVAL}s" )
   if [[ "${MQTT_TLS}" == "true" ]]; then

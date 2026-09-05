@@ -62,6 +62,7 @@ class ValidateAddonTests(unittest.TestCase):
         apparmor=VALID_APPARMOR,
         changelog=VALID_CHANGELOG,
         translations=VALID_TRANSLATIONS,
+        extra_translations=None,
         artwork_files=("icon.png", "logo.png"),
     ):
         with tempfile.TemporaryDirectory() as directory:
@@ -77,6 +78,9 @@ class ValidateAddonTests(unittest.TestCase):
             if translations is not None:
                 (root / "translations").mkdir()
                 (root / "translations" / "en.yaml").write_text(translations, encoding="utf-8")
+            for name, body in (extra_translations or {}).items():
+                (root / "translations").mkdir(exist_ok=True)
+                (root / "translations" / name).write_text(body, encoding="utf-8")
             for artwork in artwork_files:
                 (root / artwork).write_bytes(b"\x89PNG\r\n\x1a\n")
             return validate_addon(root)
@@ -230,6 +234,26 @@ class ValidateAddonTests(unittest.TestCase):
             translations=VALID_TRANSLATIONS + "  gone:\n    name: Removed\n"
         )
         self.assertIn("translations/en.yaml describes unknown options: gone", errors)
+
+    # The Supervisor serves whichever translation matches the reader's language,
+    # so one that has drifted from the schema is a half-translated page for
+    # exactly the people it was added for.
+    def test_holds_every_language_to_the_schema(self):
+        errors = self.validate(
+            extra_translations={"nl.yaml": "configuration:\n  email:\n    name: E-mailadres\n"}
+        )
+        self.assertIn("translations/nl.yaml is missing options: mqtt_discovery", errors)
+        errors = self.validate(
+            extra_translations={"nl.yaml": VALID_TRANSLATIONS + "  weg:\n    name: Weg\n"}
+        )
+        self.assertIn("translations/nl.yaml describes unknown options: weg", errors)
+
+    def test_requires_a_name_for_every_translated_option(self):
+        nameless = VALID_TRANSLATIONS.replace(
+            "    name: Publish to Home Assistant over MQTT\n", ""
+        )
+        errors = self.validate(translations=nameless)
+        self.assertIn("translations/en.yaml option mqtt_discovery has no name", errors)
 
     def test_requires_store_artwork(self):
         errors = self.validate(artwork_files=("icon.png",))

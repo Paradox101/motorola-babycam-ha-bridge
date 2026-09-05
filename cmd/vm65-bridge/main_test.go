@@ -22,21 +22,38 @@ import (
 func TestLoadCredentialSetReadsEveryRegistryCamera(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "cameras.json")
 	data := `{"cameras":[
-		{"device_id":1,"device_udid":"a","device_name":"Room A","model":"VM65CONNECT","sid":"sid-a","device_token":"token-a","control_host":"relay","device_api_host":"shard.example","device_api_port":2288},
-		{"device_id":2,"device_udid":"b","device_name":"Room B","model":"MBP99","sid":"sid-b","device_token":"token-b","control_host":"relay"}
+		{"device_id":1,"device_udid":"a","device_name":"Room A","model":"VM65CONNECT","sid":"sid-a","device_token":"token-a","control_host":"relay","device_api_host":"shard.example","device_api_port":2288,"listen_addr":"127.0.0.1:8554"},
+		{"device_id":2,"device_udid":"b","device_name":"Room B","model":"MBP99","sid":"sid-b","device_token":"token-b","control_host":"relay","listen_addr":"127.0.0.1:9601"}
 	]}`
 	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	cameras, err := loadCredentialSet(appconfig.Config{RegistryPath: path})
+	set, err := loadCredentialSet(appconfig.Config{RegistryPath: path})
 	if err != nil {
 		t.Fatal(err)
 	}
+	cameras := set.credentials
 	if len(cameras) != 2 || cameras[1].Model != "MBP99" {
 		t.Fatalf("cameras = %#v", cameras)
 	}
 	if cameras[0].DeviceAPIHost != "shard.example" || cameras[0].DeviceAPIPort != 2288 {
 		t.Fatalf("device API endpoint = %s:%d", cameras[0].DeviceAPIHost, cameras[0].DeviceAPIPort)
+	}
+	// The address the setup command allocated is carried through rather than
+	// recomputed: it is the one the media server was configured with.
+	if set.addresses["b"] != "127.0.0.1:9601" {
+		t.Fatalf("recorded addresses = %#v", set.addresses)
+	}
+	registry, err := app.Build(app.BuildOptions{
+		BaseAddress: "127.0.0.1:8554",
+		Credentials: cameras,
+		Recorded:    set.addresses,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if registry.Cameras[1].ListenAddr != "127.0.0.1:9601" {
+		t.Fatalf("camera b listens on %q, want the recorded address", registry.Cameras[1].ListenAddr)
 	}
 }
 

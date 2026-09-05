@@ -11,9 +11,10 @@ models work when they expose the same required 5GenCare/Magic fields.
    account address and sends a code to it.
 3. Enter the code from the email. The cameras start straight away.
 
-There is nothing to fill in beforehand and no second restart. The `email` and
-`otp_code` options still work for an unattended setup, but the Web UI needs
-neither, and a code entered there is never written to the configuration.
+There is nothing to fill in beforehand and no second restart. The `email` option
+is there if you want the address filled in for you; the Web UI needs it no more
+than anything else, and a code entered there is never written to the
+configuration.
 
 Codes expire. If one is refused as expired, use **Send a new code** on the same
 page — the old code is discarded rather than retried.
@@ -112,8 +113,8 @@ video keeps falling back to MSE and a copied RTSP URL resolves nowhere.
 
 | Option | Meaning |
 | --- | --- |
+| `language` | Language of the add-on's own pages: `auto` (default, follows your browser), `en` or `nl` — see [Language](#language) |
 | `email` | Motorola Nursery account email; optional, the Web UI asks for it |
-| `otp_code` | Legacy unattended pairing code; leave empty and use the Web UI |
 | `control_host` | Magic relay control host |
 | `stream_backend` | `bundled` or `external` |
 | `stream_overlay` | Burn the date, time and camera name into the picture. Off by default: the camera has no on-screen display of its own, so the add-on re-encodes every frame to add one — see [The overlay](#the-overlay) |
@@ -127,11 +128,13 @@ video keeps falling back to MSE and a copied RTSP URL resolves nowhere.
 | `stream_host` | Hostname advertised for RTSP and WebRTC media (not used for snapshots) |
 | `rtsp_port` | Host port container `8555/tcp` is mapped to; it is the port in the advertised RTSP URL |
 | `webrtc_port` | Host port container `8556` is mapped to; it is the address browsers are told to use for WebRTC |
-| `external_stream_port` | Deprecated. It meant the WebRTC host port in bundled mode and the RTSP host port in external mode; `0` disables it, any other value still wins |
 | `shutdown_timeout` | Graceful child-process shutdown limit in seconds |
 | `credential_refresh_interval` | Session/device refresh interval in seconds |
 
-All version 0.2.0 option names remain valid.
+The `otp_code` and `external_stream_port` options are gone. Pairing happens in
+the Web UI, and the two host ports are `rtsp_port` and `webrtc_port`; a stored
+value for either of the removed options is ignored rather than rejected, so an
+existing installation upgrades without being touched.
 
 If you remap a media port in the Network section, set `rtsp_port` or
 `webrtc_port` to the host port you chose. Those are the numbers the add-on hands
@@ -154,6 +157,13 @@ internal Supervisor network, which needs no host port and no name that resolves
 on the LAN. If a published port is occupied, change the host-side value only —
 and set `rtsp_port` or `webrtc_port` to match, since those are the numbers the
 add-on hands out to Home Assistant and to browsers.
+
+Inside the container each camera also gets a bridge of its own, on loopback,
+starting at `127.0.0.1:8554`. Those need no configuration: if a port is already
+taken the add-on moves up to the first free one and tells the media server the
+address it settled on, so the two can never disagree. An address a camera has
+already been given is kept from then on, including across a credential refresh,
+so a camera's port does not move under a media server that is streaming from it.
 
 go2rtc's own API is no longer reachable from the network at all. It binds
 container loopback, and the Web UI reaches it through the add-on, which checks
@@ -258,6 +268,22 @@ broker links, and the `stream_host` this add-on advertises — with a warning wh
 that is not the address your browser used to reach the page. It also holds the
 two repairs that apply to everything at once: **Restart media server** and
 **Refresh credentials**.
+
+### Language
+
+The add-on's own pages — the camera console and the pairing screen — are
+available in English and Dutch. `language` decides which you get:
+
+- `auto`, the default, follows the browser. A browser set to Dutch gets Dutch,
+  everything else gets English.
+- `en` or `nl` picks one regardless of the browser.
+
+Home Assistant translates the add-on's configuration page itself, from the files
+in the add-on's `translations` directory, and it does that by your Home
+Assistant language. It does not pass that language on to the add-on: the
+Supervisor tells the add-on who is asking, never what they read. That is the
+whole reason this option exists — for a browser whose language is not the one
+you want to read the camera page in.
 
 ### How live video reaches you
 

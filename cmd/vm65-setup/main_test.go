@@ -10,10 +10,13 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/local/motorola-vm65-bridge/internal/app"
+	"github.com/local/motorola-vm65-bridge/internal/bridge"
 	"github.com/local/motorola-vm65-bridge/internal/fivegencare"
 )
 
@@ -25,7 +28,11 @@ func TestWriteCameraFilesPreservesLegacyFirstCameraAndFullRegistry(t *testing.T)
 		{DeviceUDID: "a", Model: "VM65CONNECT"},
 		{DeviceUDID: "b", Model: "MBP99"},
 	}
-	if err := writeCameraFiles(legacyPath, registryPath, cameras); err != nil {
+	built, err := buildCameraRegistry(cameras, registryPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeCameraFiles(legacyPath, registryPath, built); err != nil {
 		t.Fatal(err)
 	}
 	var legacy fivegencare.CameraCredentials
@@ -344,5 +351,86 @@ func TestGeneratedConfigCarriesAnMJPEGStreamPerCamera(t *testing.T) {
 	// The camera streams themselves must stay untouched.
 	if sources := config.Streams["vm65"]; len(sources) != 1 || !strings.HasPrefix(sources[0], "rtsp://") {
 		t.Fatalf("vm65 = %#v", sources)
+	}
+}
+
+// The allocation has to reach both files, or the media server dials a port the
+// bridge is not on. A port something else holds is skipped, and the address
+// that results is the one written into the registry and the go2rtc source.
+func TestABusyPortShiftsBothTheRegistryAndTheMediaConfiguration(t *testing.T) {
+	occupied, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer occupied.Close()
+	base := occupied.Addr().String()
+	_, portText, err := net.SplitHostPort(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	busy, err := strconv.Atoi(portText)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	directory := t.TempDir()
+	registryPath := filepath.Join(directory, "cameras.json")
+	cameras := []fivegencare.CameraCredentials{{
+		DeviceUDID: "a", DeviceName: "Room A", RTSPUser: "owner", RTSPPass: "p", AccessToken: "t",
+	}}
+	registry, err := app.Build(app.BuildOptions{
+		BaseAddress: base,
+		Credentials: []bridge.Credentials{{DeviceUDID: "a", DeviceName: "Room A"}},
+		Recorded:    recordedAddresses(registryPath),
+		PortInUse:   app.PortInUse,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	allocated := registry.Cameras[0].ListenAddr
+	if allocated == base {
+		t.Fatalf("the busy port %d was handed out anyway", busy)
+	}
+	if allocated != "127.0.0.1:"+strconv.Itoa(busy+1) {
+		t.Fatalf("allocated %q, want the next port above the busy one", allocated)
+	}
+
+	entry := cameraRegistryEntry{
+		CameraCredentials: cameras[0],
+		StreamName:        registry.Cameras[0].StreamName,
+		ListenAddr:        allocated,
+	}
+	if err := writeCameraFiles(filepath.Join(directory, "creds.json"), registryPath,
+		cameraRegistry{Cameras: []cameraRegistryEntry{entry}}); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(directory, "go2rtc.yaml")
+	if err := writeGo2RTCConfig(configPath, cameraRegistry{Cameras: []cameraRegistryEntry{entry}}, go2RTCOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), allocated) {
+		t.Fatalf("the media configuration does not point at %q", allocated)
+	}
+
+	// A second run reads the address back and keeps it, so the port a camera
+	// was given does not move under a running media server.
+	if recordedAddresses(registryPath)["a"] != allocated {
+		t.Fatalf("the allocated address was not recorded: %#v", recordedAddresses(registryPath))
+	}
+	again, err := app.Build(app.BuildOptions{
+		BaseAddress: base,
+		Credentials: []bridge.Credentials{{DeviceUDID: "a", DeviceName: "Room A"}},
+		Recorded:    recordedAddresses(registryPath),
+		PortInUse:   app.PortInUse,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.Cameras[0].ListenAddr != allocated {
+		t.Fatalf("the second run moved the camera to %q", again.Cameras[0].ListenAddr)
 	}
 }

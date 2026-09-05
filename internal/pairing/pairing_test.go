@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/local/motorola-vm65-bridge/internal/fivegencare"
+	"github.com/local/motorola-vm65-bridge/internal/i18n"
 	"github.com/local/motorola-vm65-bridge/internal/ingress"
 )
 
@@ -249,5 +250,87 @@ func TestUnknownPathsAreNotFound(t *testing.T) {
 func TestNewServerRequiresAProvider(t *testing.T) {
 	if _, err := NewServer(Config{}); err == nil {
 		t.Fatal("expected a missing provider to be rejected")
+	}
+}
+
+// dutch sends one request as a Dutch browser would.
+func dutch(handler http.Handler, method, target, body string) *httptest.ResponseRecorder {
+	var reader io.Reader
+	if body != "" {
+		reader = strings.NewReader(body)
+	}
+	request := httptest.NewRequest(method, target, reader)
+	request.RemoteAddr = "172.30.32.2:41000"
+	request.Header.Set("Accept-Language", "nl-NL,nl;q=0.9,en;q=0.8")
+	if body != "" {
+		request.Header.Set("Content-Type", "application/json")
+	}
+	request.Header.Set(ingress.UserIDHeader, "01HQ")
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	return recorder
+}
+
+func TestThePairingPageFollowsTheBrowsersLanguage(t *testing.T) {
+	handler := newServer(t, &fakeProvider{}, nil)
+
+	page := dutch(handler, http.MethodGet, "/", "").Body.String()
+	if !strings.Contains(page, "Koppel je Motorola Nursery-account") {
+		t.Fatal("a Dutch browser is not served the Dutch pairing page")
+	}
+	if !strings.Contains(page, `<html lang="nl">`) {
+		t.Fatal("the Dutch page is not marked up as Dutch")
+	}
+
+	english := do(handler, http.MethodGet, "/", "", true).Body.String()
+	if !strings.Contains(english, "Pair your Motorola Nursery account") {
+		t.Fatal("a browser with no preference is not served English")
+	}
+}
+
+// The page prints what this server sends verbatim, so a refusal that arrives in
+// English is a page that switches language exactly when it has bad news.
+func TestRefusalsAreWrittenInTheReadersLanguage(t *testing.T) {
+	provider := &fakeProvider{submitEr: fivegencare.ErrNoChallenge}
+	handler := newServer(t, provider, nil)
+
+	recorder := dutch(handler, http.MethodPost, "/api/pairing/verify", `{"code":"123456"}`)
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusBadRequest)
+	}
+	var body struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Error != catalogs[i18n.Dutch]["errCodeExpired"] {
+		t.Fatalf("error = %q, want the Dutch message", body.Error)
+	}
+
+	// A body this server cannot read is refused in the reader's language too.
+	recorder = dutch(handler, http.MethodPost, "/api/pairing/verify", `not json`)
+	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Error != catalogs[i18n.Dutch]["errBadRequest"] {
+		t.Fatalf("error = %q, want the Dutch message", body.Error)
+	}
+}
+
+func TestEveryPairingLanguageRendersCompletely(t *testing.T) {
+	for _, language := range i18n.Supported {
+		rendered := pageFor(language)
+		if strings.Contains(rendered, "%%") {
+			t.Fatalf("the %q page still carries a token", language)
+		}
+		for key, value := range catalogs[language] {
+			if key == "htmlLang" {
+				continue
+			}
+			if !strings.Contains(rendered, value) {
+				t.Fatalf("the %q page never uses %q (%q)", language, key, value)
+			}
+		}
 	}
 }

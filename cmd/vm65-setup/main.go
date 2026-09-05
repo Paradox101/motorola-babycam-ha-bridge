@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -25,6 +26,7 @@ import (
 	"github.com/local/motorola-vm65-bridge/internal/buildinfo"
 	"github.com/local/motorola-vm65-bridge/internal/fivegencare"
 	"github.com/local/motorola-vm65-bridge/internal/health"
+	"github.com/local/motorola-vm65-bridge/internal/i18n"
 	"github.com/local/motorola-vm65-bridge/internal/pairing"
 )
 
@@ -95,6 +97,9 @@ type options struct {
 	requestCode bool
 	// trustedCIDRs restricts who may reach the pairing page.
 	trustedCIDRs []string
+	// language forces the language of the pairing page. Empty follows the
+	// browser, which is the only preference the Supervisor passes on.
+	language i18n.Language
 }
 
 func main() {
@@ -115,9 +120,16 @@ func main() {
 	flag.StringVar(&opts.statusAddr, "status", "", "optional health listen address used while pairing is pending")
 	flag.BoolVar(&opts.requestCode, "request-code", true, "send an email code when none is pending")
 	trustedCIDRs := flag.String("trusted-cidr", "", "comma-separated networks allowed to reach the pairing page (default: the Supervisor network)")
+	language := flag.String("language", i18n.Auto, "language of the pairing page: "+strings.Join(i18n.Options(), ", "))
 	showVersion := flag.Bool("version", false, "print the build version and exit")
 	flag.Parse()
 	opts.trustedCIDRs = parseTrustedCIDRs(*trustedCIDRs)
+	parsedLanguage, ok := i18n.ParseOption(*language)
+	if !ok {
+		fmt.Fprintf(os.Stderr, "language must be one of %s\n", strings.Join(i18n.Options(), ", "))
+		os.Exit(2)
+	}
+	opts.language = parsedLanguage
 
 	if *showVersion {
 		fmt.Println("vm65-setup", buildinfo.String())
@@ -154,14 +166,16 @@ func run(opts options) error {
 	if err != nil {
 		return err
 	}
-	if err := writeCameraFiles(opts.outPath, opts.registryPath, cameras); err != nil {
+	// One allocation, used by both files: the media server is told the address
+	// the bridge is told to listen on, and neither can drift from the other.
+	registry, err := buildCameraRegistry(cameras, opts.registryPath)
+	if err != nil {
+		return err
+	}
+	if err := writeCameraFiles(opts.outPath, opts.registryPath, registry); err != nil {
 		return err
 	}
 	if opts.go2RTCPath != "" {
-		registry, err := buildCameraRegistry(cameras)
-		if err != nil {
-			return err
-		}
 		go2rtcOptions := go2RTCOptions{
 			EnableWebRTC:    opts.go2RTCWebRTC,
 			WebRTCCandidate: opts.webrtcCandidate,
@@ -227,6 +241,7 @@ func servePairing(provider *fivegencare.Provider, opts options, logger *slog.Log
 		TrustedCIDRs:   opts.trustedCIDRs,
 		Logger:         logger.With("component", "pairing"),
 		RequestTimeout: opts.timeout,
+		Language:       opts.language,
 		OnPaired:       func() { close(paired) },
 	})
 	if err != nil {
@@ -301,24 +316,30 @@ func parseTrustedCIDRs(value string) []string {
 	return networks
 }
 
-func writeCameraFiles(outPath, registryPath string, cameras []fivegencare.CameraCredentials) error {
-	if len(cameras) == 0 {
+func writeCameraFiles(outPath, registryPath string, registry cameraRegistry) error {
+	if len(registry.Cameras) == 0 {
 		return errors.New("cannot write an empty camera registry")
-	}
-	registry, err := buildCameraRegistry(cameras)
-	if err != nil {
-		return err
 	}
 	if err := fivegencare.WritePrivateJSON(registryPath, registry); err != nil {
 		return fmt.Errorf("write camera registry: %w", err)
 	}
-	if err := fivegencare.WritePrivateJSON(outPath, cameras[0]); err != nil {
+	if err := fivegencare.WritePrivateJSON(outPath, registry.Cameras[0].CameraCredentials); err != nil {
 		return fmt.Errorf("write legacy camera credentials: %w", err)
 	}
 	return nil
 }
 
-func buildCameraRegistry(cameras []fivegencare.CameraCredentials) (cameraRegistry, error) {
+// BridgeListenBase is the host and first port the camera bridges listen on.
+// Each camera gets the first free port at or above the one its position
+// implies, so a port something else already holds costs a camera nothing.
+const BridgeListenBase = "127.0.0.1:8554"
+
+// buildCameraRegistry allocates a listen address per camera and pairs it with
+// its credentials. Addresses already recorded in registryPath are kept: they
+// are the ones the media server was configured with, and on a credential
+// refresh they read as busy precisely because this add-on's own bridge is
+// serving on them.
+func buildCameraRegistry(cameras []fivegencare.CameraCredentials, registryPath string) (cameraRegistry, error) {
 	bridgeCredentials := make([]bridge.Credentials, 0, len(cameras))
 	byUDID := make(map[string]fivegencare.CameraCredentials, len(cameras))
 	for _, camera := range cameras {
@@ -328,7 +349,12 @@ func buildCameraRegistry(cameras []fivegencare.CameraCredentials) (cameraRegistr
 		})
 		byUDID[camera.DeviceUDID] = camera
 	}
-	runtimeRegistry, err := app.BuildRegistry("127.0.0.1:8554", bridgeCredentials)
+	runtimeRegistry, err := app.Build(app.BuildOptions{
+		BaseAddress: BridgeListenBase,
+		Credentials: bridgeCredentials,
+		Recorded:    recordedAddresses(registryPath),
+		PortInUse:   app.PortInUse,
+	})
 	if err != nil {
 		return cameraRegistry{}, fmt.Errorf("build camera registry: %w", err)
 	}
@@ -341,6 +367,30 @@ func buildCameraRegistry(cameras []fivegencare.CameraCredentials) (cameraRegistr
 		})
 	}
 	return cameraRegistry{Cameras: entries}, nil
+}
+
+// recordedAddresses reads the listen address each camera was given by an
+// earlier run. A registry that is missing, unreadable or half-written yields
+// nothing, which only means every address is allocated afresh.
+func recordedAddresses(registryPath string) map[string]string {
+	if registryPath == "" {
+		return nil
+	}
+	raw, err := os.ReadFile(registryPath)
+	if err != nil {
+		return nil
+	}
+	var previous cameraRegistry
+	if err := json.Unmarshal(raw, &previous); err != nil {
+		return nil
+	}
+	addresses := make(map[string]string, len(previous.Cameras))
+	for _, camera := range previous.Cameras {
+		if camera.DeviceUDID != "" && camera.ListenAddr != "" {
+			addresses[camera.DeviceUDID] = camera.ListenAddr
+		}
+	}
+	return addresses
 }
 
 // MJPEGSuffix names the companion stream that transcodes a camera to MJPEG.

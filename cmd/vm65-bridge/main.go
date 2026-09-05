@@ -53,6 +53,11 @@ type credsFile struct {
 	TargetPort    int    `json:"target_port"`
 	DeviceAPIHost string `json:"device_api_host"`
 	DeviceAPIPort int    `json:"device_api_port"`
+	// ListenAddr is the address the setup command allocated for this camera's
+	// bridge. It is honoured rather than recomputed: the setup command probes
+	// for a free port and writes the same address into the media server's
+	// configuration, so re-deriving it here is how the two would drift apart.
+	ListenAddr string `json:"listen_addr"`
 }
 
 func main() {
@@ -87,7 +92,11 @@ func run(cfg appconfig.Config, logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	registry, err := app.BuildRegistry(cfg.ListenAddr, credentials)
+	registry, err := app.Build(app.BuildOptions{
+		BaseAddress: cfg.ListenAddr,
+		Credentials: credentials.credentials,
+		Recorded:    credentials.addresses,
+	})
 	if err != nil {
 		return err
 	}
@@ -266,7 +275,11 @@ func watchForReload(ctx context.Context, cfg appconfig.Config, runtime *app.Runt
 				healthState.SetLastError(health.ErrorConfiguration)
 				continue
 			}
-			registry, err := app.BuildRegistry(cfg.ListenAddr, credentials)
+			registry, err := app.Build(app.BuildOptions{
+				BaseAddress: cfg.ListenAddr,
+				Credentials: credentials.credentials,
+				Recorded:    credentials.addresses,
+			})
 			if err != nil {
 				logger.Error("credential reload produced an invalid registry; keeping the running cameras", "err", err)
 				healthState.SetLastError(health.ErrorConfiguration)
@@ -787,6 +800,7 @@ func startWebServer(ctx context.Context, cfg appconfig.Config, registry app.Regi
 		TrustedCIDRs: cfg.IngressTrustedCIDRs,
 		Media:        media,
 		Snapshot:     snapshots.TrustedHandler(),
+		Language:     cfg.Language,
 		Logger:       logger.With("component", "webui"),
 	})
 	if err != nil {
@@ -872,48 +886,68 @@ func startHTTPServer(ctx context.Context, name, addr string, handler http.Handle
 	return nil
 }
 
-func loadCreds(path string) (bridge.Credentials, error) {
+// loadCreds reads the single-camera credentials file, returning the address it
+// records alongside them.
+func loadCreds(path string) (bridge.Credentials, string, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		return bridge.Credentials{}, fmt.Errorf("read credentials %q: %w", path, err)
+		return bridge.Credentials{}, "", fmt.Errorf("read credentials %q: %w", path, err)
 	}
 	var f credsFile
 	if err := json.Unmarshal(raw, &f); err != nil {
-		return bridge.Credentials{}, fmt.Errorf("parse credentials %q: %w", path, err)
+		return bridge.Credentials{}, "", fmt.Errorf("parse credentials %q: %w", path, err)
 	}
-	return f.credentials()
+	credentials, err := f.credentials()
+	return credentials, f.ListenAddr, err
 }
 
-func loadCredentialSet(cfg appconfig.Config) ([]bridge.Credentials, error) {
+// credentialSet is one reading of the credential files: the cameras, and the
+// listen address the setup command allocated for each of them.
+type credentialSet struct {
+	credentials []bridge.Credentials
+	addresses   map[string]string
+}
+
+func loadCredentialSet(cfg appconfig.Config) (credentialSet, error) {
 	if cfg.RegistryPath == "" {
-		credentials, err := loadCreds(cfg.CredentialsPath)
+		credentials, address, err := loadCreds(cfg.CredentialsPath)
 		if err != nil {
-			return nil, err
+			return credentialSet{}, err
 		}
-		return []bridge.Credentials{credentials}, nil
+		set := credentialSet{credentials: []bridge.Credentials{credentials}}
+		if address != "" && credentials.DeviceUDID != "" {
+			set.addresses = map[string]string{credentials.DeviceUDID: address}
+		}
+		return set, nil
 	}
 	raw, err := os.ReadFile(cfg.RegistryPath)
 	if err != nil {
-		return nil, fmt.Errorf("read camera registry %q: %w", cfg.RegistryPath, err)
+		return credentialSet{}, fmt.Errorf("read camera registry %q: %w", cfg.RegistryPath, err)
 	}
 	var registry struct {
 		Cameras []credsFile `json:"cameras"`
 	}
 	if err := json.Unmarshal(raw, &registry); err != nil {
-		return nil, fmt.Errorf("parse camera registry %q: %w", cfg.RegistryPath, err)
+		return credentialSet{}, fmt.Errorf("parse camera registry %q: %w", cfg.RegistryPath, err)
 	}
 	if len(registry.Cameras) == 0 {
-		return nil, errors.New("camera registry must contain at least one camera")
+		return credentialSet{}, errors.New("camera registry must contain at least one camera")
 	}
-	credentials := make([]bridge.Credentials, 0, len(registry.Cameras))
+	set := credentialSet{
+		credentials: make([]bridge.Credentials, 0, len(registry.Cameras)),
+		addresses:   make(map[string]string, len(registry.Cameras)),
+	}
 	for index, camera := range registry.Cameras {
 		value, err := camera.credentials()
 		if err != nil {
-			return nil, fmt.Errorf("camera registry entry %d: %w", index, err)
+			return credentialSet{}, fmt.Errorf("camera registry entry %d: %w", index, err)
 		}
-		credentials = append(credentials, value)
+		set.credentials = append(set.credentials, value)
+		if camera.ListenAddr != "" && value.DeviceUDID != "" {
+			set.addresses[value.DeviceUDID] = camera.ListenAddr
+		}
 	}
-	return credentials, nil
+	return set, nil
 }
 
 func (f credsFile) credentials() (bridge.Credentials, error) {

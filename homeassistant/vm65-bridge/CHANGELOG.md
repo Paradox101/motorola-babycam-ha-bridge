@@ -1,6 +1,25 @@
 # Changelog
 
-## Unreleased
+## 0.13.0
+
+### Removed
+
+- The `otp_code` and `external_stream_port` options are gone from the settings.
+  Pairing happens in the Web UI, and the host ports are `rtsp_port` and
+  `webrtc_port`. A stored value for either is ignored, so nothing needs doing.
+
+### Added
+
+- A camera's internal bridge port is now chosen automatically: if the port it
+  would use is already taken, the add-on moves up to the first free one and
+  tells the media server the address it settled on. A camera keeps the port it
+  was given, so nothing moves under a stream that is playing.
+- Dutch. The add-on's own pages — the camera console and the pairing screen —
+  are now available in English and Dutch, and follow your browser: a browser set
+  to Dutch gets Dutch. This configuration page is translated by Home Assistant
+  itself, which does not tell the add-on which language you chose, so the new
+  **Web UI language** option (`auto`, `en`, `nl`) settles it for a browser whose
+  language is not the one you want to read.
 
 ### Fixed
 

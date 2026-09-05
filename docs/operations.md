@@ -12,9 +12,10 @@ MQTT connectivity is reported but does not make the camera stream unavailable.
 
 ## Pairing and recovery
 
-On first start, set the account email and leave `otp_code` empty. The add-on
-requests a code and exits with `PAIRING_REQUIRED`. Enter the code and restart.
-After successful pairing, clear `otp_code`; the persisted session is used.
+On first start the add-on comes up unpaired and serves its pairing page. Open
+the Web UI, enter the account address, and enter the code it emails you. Nothing
+has to be filled in beforehand, no restart is needed, and the code is never
+written to the configuration. The `email` option only pre-fills the address.
 
 If the service reports a rejected session, it clears only the invalid session
 and requests a new email code. Do not delete all add-on data unless pairing
@@ -42,9 +43,16 @@ starting.
 
 If Home Assistant reports a port already in use, change the left/host-side port
 in the add-on Network section. Container ports must remain unchanged. In
-external mode, map container `8555/tcp` to a free host port and set
-`external_stream_port` to that same host port. WebRTC port `8556` is unused in
-that mode and its host mapping may be cleared.
+external mode, map container `8555/tcp` to a free host port and set `rtsp_port`
+to that same host port. WebRTC port `8556` is unused in that mode and its host
+mapping may be cleared.
+
+The per-camera bridge listeners inside the container need no such attention:
+they start at `127.0.0.1:8554`, and a port that is already taken is skipped in
+favour of the next free one. The address a camera is given is recorded in
+`/data/cameras.json` and written into the generated go2rtc configuration in the
+same run, so the media server and the bridge always name the same socket, and a
+camera keeps its port across restarts and credential refreshes.
 
 If video works in the go2rtc UI but a dashboard camera causes authentication
 errors, add the camera through its entity or MQTT Discovery. Do not store a

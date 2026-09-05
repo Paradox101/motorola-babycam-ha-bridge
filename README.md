@@ -33,6 +33,9 @@ stream alias and `vm65_bridge` add-on slug.
 - automatic restart of a failed camera bridge, with exponential backoff;
 - liveness, readiness and sanitized status endpoints with live session counters;
 - graceful shutdown, and credential refresh that does not interrupt live streams;
+- the add-on's own pages in English and Dutch, following the browser unless the
+  `language` option names one, with the Home Assistant configuration page
+  translated from the add-on's own `translations` directory;
 - Linux amd64 and arm64 builds.
 
 Compatibility with other Motorola models depends on their using the same
@@ -76,6 +79,7 @@ external mode, port mapping, troubleshooting and upgrades.
 | `internal/snapshot` | Cached camera still images for Home Assistant |
 | `internal/netguard` | Listener restriction to the Supervisor network |
 | `internal/buildinfo` | Build version reported by both commands and `/status` |
+| `internal/i18n` | Language negotiation and the page renderer behind it |
 | `homeassistant/vm65-bridge` | Locally built Home Assistant add-on |
 | `deploy/go2rtc` | Standalone deployment example |
 | `docs` | Architecture, operations, security and release documentation |

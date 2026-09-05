@@ -1,6 +1,50 @@
 # Changelog
 
-## Unreleased
+## 0.13.0
+
+### Removed
+
+- **The two legacy options are gone from the add-on's settings.** `otp_code`
+  described itself as a legacy unattended pairing code and had been superseded
+  by the pairing page, which never writes a code to the configuration;
+  `external_stream_port` meant the WebRTC host port in one mode and the RTSP
+  host port in the other, and both have had an option of their own
+  (`rtsp_port`, `webrtc_port`) for two releases. A value stored for either is
+  ignored rather than rejected, so an existing installation upgrades untouched.
+
+### Added
+
+- **A bridge port that is already taken no longer costs a camera its stream.**
+  Each camera's bridge listens on loopback inside the container, starting at
+  `127.0.0.1:8554`; a port something else held meant a listener that could not
+  bind and a camera that never came up. The setup command now takes the first
+  free port at or above the one a camera's position implies, and — because it is
+  the same run that writes the media server's configuration — the address it
+  settles on reaches both files at once, so the two can never point at different
+  sockets. An address a camera already has is kept from then on: on a credential
+  refresh its port reads as busy precisely because this add-on's own bridge is
+  serving on it, and moving a camera out from under a media server that is
+  streaming from it would be the opposite of a fix. The Ingress and watchdog
+  ports deliberately do not move: the Supervisor connects to the numbers in
+  `config.yaml`, so a listener that wandered would simply be unreachable.
+- **Dutch.** The add-on's own pages — the camera console and the pairing screen
+  — are now written in English and Dutch, down to the badge on a camera that
+  cannot connect and the reason it gives. They follow the browser: a browser set
+  to Dutch gets Dutch and everything else gets English. Home Assistant
+  translates the add-on's configuration page itself from the add-on's
+  `translations` directory, which now carries `nl.yaml` beside `en.yaml`, but it
+  does not pass that language on to the add-on — the Supervisor forwards who is
+  asking, never what they read — so a new `language` option (`auto`, `en`, `nl`)
+  settles it for anyone whose browser language is not the one they want to read.
+  Each page is rendered once per language at start rather than per request, and
+  a translation that has drifted from the page fails the build instead of
+  reaching someone as a raw token.
+- The add-on metadata check now holds every language file to the schema, not
+  only English: the Supervisor serves whichever matches the reader, so an
+  incomplete one is a half-translated page for exactly the people it was added
+  for.
+- Tests for the temperature supervisor, which had none: capability discovery,
+  polling, the cameras it must skip, and the replaced-worker case below.
 
 ### Fixed
 
@@ -42,11 +86,6 @@
   cameras themselves are fine.
 - The MQTT service no longer keeps temperature state for cameras it does not
   know about, so a removed camera leaves nothing behind.
-
-### Added
-
-- Tests for the temperature supervisor, which had none: capability discovery,
-  polling, the cameras it must skip, and the replaced-worker case above.
 
 ## 0.12.0
 
