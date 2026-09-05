@@ -69,7 +69,7 @@ func TestWriteGo2RTCConfigPublishesEveryCameraAndLegacyAlias(t *testing.T) {
 			StreamName: "play-room", ListenAddr: "127.0.0.1:9554",
 		},
 	}}
-	if err := writeGo2RTCConfig(path, registry, true, "homeassistant.local:8556"); err != nil {
+	if err := writeGo2RTCConfig(path, registry, go2RTCOptions{EnableWebRTC: true, WebRTCCandidate: "homeassistant.local:8556"}); err != nil {
 		t.Fatal(err)
 	}
 	raw, err := os.ReadFile(path)
@@ -97,7 +97,7 @@ func TestWriteGo2RTCConfigCanDisableBundledWebRTC(t *testing.T) {
 		StreamName:        "nursery",
 		ListenAddr:        "127.0.0.1:8554",
 	}}}
-	if err := writeGo2RTCConfig(path, registry, false, ""); err != nil {
+	if err := writeGo2RTCConfig(path, registry, go2RTCOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	var config go2RTCConfig
@@ -278,7 +278,7 @@ func TestGeneratedConfigAdvertisesAReachableWebRTCCandidate(t *testing.T) {
 		StreamName:        "vm65-connect",
 		ListenAddr:        "127.0.0.1:8554",
 	}}}
-	if err := writeGo2RTCConfig(path, registry, true, "homeassistant.local:8556"); err != nil {
+	if err := writeGo2RTCConfig(path, registry, go2RTCOptions{EnableWebRTC: true, WebRTCCandidate: "homeassistant.local:8556"}); err != nil {
 		t.Fatal(err)
 	}
 	var config go2RTCConfig
@@ -295,7 +295,7 @@ func TestGeneratedConfigAdvertisesAReachableWebRTCCandidate(t *testing.T) {
 
 	// External mode has no bundled WebRTC listener, so there is nothing to
 	// advertise and a candidate would be a lie.
-	if err := writeGo2RTCConfig(path, registry, false, "homeassistant.local:8556"); err != nil {
+	if err := writeGo2RTCConfig(path, registry, go2RTCOptions{WebRTCCandidate: "homeassistant.local:8556"}); err != nil {
 		t.Fatal(err)
 	}
 	raw, err = os.ReadFile(path)
@@ -321,7 +321,7 @@ func TestGeneratedConfigCarriesAnMJPEGStreamPerCamera(t *testing.T) {
 		StreamName:        "vm65-connect",
 		ListenAddr:        "127.0.0.1:8554",
 	}}}
-	if err := writeGo2RTCConfig(path, registry, true, ""); err != nil {
+	if err := writeGo2RTCConfig(path, registry, go2RTCOptions{EnableWebRTC: true}); err != nil {
 		t.Fatal(err)
 	}
 	raw, err := os.ReadFile(path)

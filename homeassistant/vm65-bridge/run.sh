@@ -48,6 +48,45 @@ WEBRTC_PORT=$(bashio::config 'webrtc_port')
 EXTERNAL_STREAM_PORT=$(bashio::config 'external_stream_port')
 SHUTDOWN_TIMEOUT=$(bashio::config 'shutdown_timeout')
 CREDENTIAL_REFRESH_INTERVAL=$(bashio::config 'credential_refresh_interval')
+STREAM_OVERLAY=$(bashio::config 'stream_overlay')
+
+# The burnt-in overlay needs a font, and drawing it needs an ffmpeg built with
+# libfreetype. Both ship in this image, but an option that silently produces no
+# picture is worse than one that says why it stayed off, and a build without
+# either must not cost anyone their video. Resolve the font here and let
+# vm65-setup make the final call: it renders one frame through the filter it
+# generated before putting it in front of a camera.
+OVERLAY_FONT=""
+overlay_font_path() {
+  local candidate
+  local -a candidates
+  if [[ -n "${VM65_OVERLAY_FONT:-}" ]]; then
+    # An explicit font is the only one tried: falling back to a system font
+    # after being handed a path would hide the typo that made it unreadable.
+    candidates=( "${VM65_OVERLAY_FONT}" )
+  else
+    candidates=(
+      /usr/share/fonts/dejavu/DejaVuSans.ttf
+      /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf
+      /usr/share/fonts/TTF/DejaVuSans.ttf
+    )
+  fi
+  for candidate in "${candidates[@]}"; do
+    if [[ -r "${candidate}" ]]; then
+      printf '%s' "${candidate}"
+      return 0
+    fi
+  done
+  return 1
+}
+if [[ "${STREAM_OVERLAY}" == "true" ]]; then
+  if OVERLAY_FONT=$(overlay_font_path); then
+    bashio::log.info "Burning the date, time and camera name into the picture; this re-encodes every frame"
+  else
+    OVERLAY_FONT=""
+    bashio::log.warning "Overlay requested but no font is installed; leaving the picture untouched"
+  fi
+fi
 
 # Home Assistant can hand us the broker itself. Anything set explicitly in the
 # add-on options still wins, so existing configurations keep working.
@@ -142,6 +181,9 @@ load_credentials() {
   setup_args+=( -request-code=false )
   if [[ "${STREAM_BACKEND}" == "external" ]]; then
     setup_args+=( -go2rtc-webrtc=false )
+  fi
+  if [[ -n "${OVERLAY_FONT}" ]]; then
+    setup_args+=( -overlay-font "${OVERLAY_FONT}" )
   fi
   if [[ "${interactive}" == "true" ]]; then
     setup_args+=( -pair-ui "0.0.0.0:${INGRESS_PORT}" -status 0.0.0.0:8557 )

@@ -1,6 +1,21 @@
 # Changelog
 
-## 0.11.1
+## 0.12.0
+
+### Added
+
+- **An optional burnt-in overlay**: a clock in the top-left corner and the
+  camera name in the bottom-right, the way a camera with its own on-screen
+  display does it. Turn on `stream_overlay` in the add-on options. It is off by
+  default and stays that way on upgrade: the camera cannot draw this itself, so
+  the add-on re-encodes every frame to add it, which costs processing power on
+  the machine running Home Assistant. Every published name of a camera reads one
+  untouched source stream, so the overlay costs a single relay session; the
+  camera's audio is copied through rather than dropped; the camera name is
+  handed to ffmpeg in a file, so an apostrophe or colon in it is drawn instead
+  of silently eating the rest of the name; and the add-on renders one frame
+  through the filter before using it, falling back to the plain picture with a
+  log line if this build of ffmpeg will not draw it.
 
 ### Fixed
 

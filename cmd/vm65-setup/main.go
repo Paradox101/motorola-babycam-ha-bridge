@@ -7,12 +7,15 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -69,6 +72,10 @@ type options struct {
 	registryPath string
 	go2RTCPath   string
 	go2RTCWebRTC bool
+	// overlayFont is the TrueType font the burnt-in overlay draws with. Empty
+	// disables the overlay, which is the default: burning text into the picture
+	// costs a full re-encode of every frame.
+	overlayFont string
 	// webrtcCandidate is the address browsers should reach for WebRTC media,
 	// normally the Home Assistant host and the published WebRTC port.
 	webrtcCandidate string
@@ -100,6 +107,7 @@ func main() {
 	flag.StringVar(&opts.go2RTCPath, "go2rtc-config", "", "optional generated go2rtc configuration output")
 	flag.BoolVar(&opts.go2RTCWebRTC, "go2rtc-webrtc", true, "enable go2rtc API and WebRTC listeners")
 	flag.StringVar(&opts.webrtcCandidate, "webrtc-candidate", "", "host:port browsers use for WebRTC media, e.g. homeassistant.local:8556")
+	flag.StringVar(&opts.overlayFont, "overlay-font", "", "TrueType font used to burn a clock and the camera name into the picture; empty leaves the picture untouched")
 	flag.StringVar(&opts.relayHost, "control-host", "vrelay-de0.5gen.care", "Magic relay control host")
 	flag.DurationVar(&opts.timeout, "timeout", 30*time.Second, "overall timeout for the account exchange")
 	flag.BoolVar(&opts.verbose, "v", false, "verbose protocol diagnostics (never logs credentials)")
@@ -154,7 +162,13 @@ func run(opts options) error {
 		if err != nil {
 			return err
 		}
-		if err := writeGo2RTCConfig(opts.go2RTCPath, registry, opts.go2RTCWebRTC, opts.webrtcCandidate); err != nil {
+		go2rtcOptions := go2RTCOptions{
+			EnableWebRTC:    opts.go2RTCWebRTC,
+			WebRTCCandidate: opts.webrtcCandidate,
+			OverlayFont:     opts.overlayFont,
+			Logger:          logger,
+		}
+		if err := writeGo2RTCConfig(opts.go2RTCPath, registry, go2rtcOptions); err != nil {
 			return fmt.Errorf("write go2rtc configuration: %w", err)
 		}
 	}
@@ -337,7 +351,164 @@ func buildCameraRegistry(cameras []fivegencare.CameraCredentials) (cameraRegistr
 // why stills worked while the last-resort video transport did not.
 const MJPEGSuffix = "-mjpeg"
 
-func writeGo2RTCConfig(path string, registry cameraRegistry, enableWebRTC bool, webrtcCandidate string) error {
+// buildOverlays writes each camera's name where drawtext can read it and
+// returns the filter per camera, keyed by stream name. An empty result means
+// no overlay: either it was never asked for, or the filter did not survive the
+// render check and the picture is better off untouched.
+//
+// It is all or nothing on purpose. A configuration where one camera carries a
+// timestamp and another does not is worse than one where none of them do: the
+// missing stamp is the one you would trust.
+func buildOverlays(configPath string, registry cameraRegistry, opts go2RTCOptions) (map[string]string, error) {
+	if opts.OverlayFont == "" {
+		return nil, nil
+	}
+	log := opts.logger()
+	if _, err := os.Stat(opts.OverlayFont); err != nil {
+		log.Warn("overlay disabled: the font is not readable", "font", opts.OverlayFont, "err", err)
+		return nil, nil
+	}
+	verify := opts.VerifyOverlay
+	if verify == nil {
+		verify = ffmpegCanRender
+	}
+
+	filters := make(map[string]string, len(registry.Cameras))
+	for _, camera := range registry.Cameras {
+		textPath := overlayTextPath(configPath, camera.StreamName)
+		if err := os.WriteFile(textPath, []byte(overlayName(camera)), 0o600); err != nil {
+			return nil, fmt.Errorf("write overlay text for %s: %w", camera.StreamName, err)
+		}
+		filter := overlayFilter(opts.OverlayFont, textPath)
+		if err := verify(filter); err != nil {
+			log.Warn("overlay disabled: this build of ffmpeg cannot render it",
+				"camera", camera.StreamName, "err", err)
+			return nil, nil
+		}
+		filters[camera.StreamName] = filter
+	}
+	log.Info("burning a clock and the camera name into the picture",
+		"cameras", len(filters), "font", opts.OverlayFont)
+	return filters, nil
+}
+
+// overlayTextPath is where a camera's name is kept for drawtext to read. The
+// name never enters the filter itself: quoting it there is a trap that fails
+// silently — an apostrophe swallows the rest of the word rather than erroring.
+func overlayTextPath(configPath, streamName string) string {
+	return filepath.Join(filepath.Dir(configPath), "overlay-"+streamName+".txt")
+}
+
+// overlayName is what the camera is called on screen.
+func overlayName(camera cameraRegistryEntry) string {
+	name := strings.TrimSpace(camera.DeviceName)
+	if name == "" {
+		name = camera.StreamName
+	}
+	// One line only: drawtext renders a newline as a second line, which would
+	// climb out of the corner it is anchored in.
+	name = strings.NewReplacer("\r", " ", "\n", " ").Replace(name)
+	if len([]rune(name)) > overlayNameLimit {
+		name = string([]rune(name)[:overlayNameLimit])
+	}
+	return name
+}
+
+const overlayNameLimit = 48
+
+// overlayFilter draws the clock in the top-left corner and the camera name in
+// the bottom-right, the way a camera with its own on-screen display does.
+//
+// The escaping is exact and was arrived at by rendering it: the colon that
+// separates %{localtime} from its format needs one backslash to survive the
+// filtergraph parser, while the colons inside the clock need three — one pair
+// collapsing to a backslash that drawtext's own expansion then reads as an
+// escaped colon. Two backslashes give "Stray %", none give "requires at most 1
+// arguments", and both of those only appear on stderr while ffmpeg exits 0.
+func overlayFilter(fontPath, textPath string) string {
+	const style = ":fontsize=h/22:fontcolor=white:shadowcolor=black:shadowx=2:shadowy=2"
+	font := "fontfile=" + escapeFilterValue(fontPath)
+	clock := "drawtext=" + font +
+		`:text='%{localtime\:%d/%m/%Y %H\\\:%M\\\:%S}'` +
+		style + ":x=12:y=10"
+	// expansion=none keeps the name literal: a % or a : in it is drawn, not
+	// interpreted.
+	name := "drawtext=" + font +
+		":textfile=" + escapeFilterValue(textPath) + ":expansion=none" +
+		style + ":x=w-tw-12:y=h-th-10"
+	return clock + "," + name
+}
+
+// escapeFilterValue protects a path from the filtergraph parser, which reads a
+// colon as the next option and a backslash as an escape. A double quote is
+// removed outright: go2rtc splits the command it builds on quotes, so one here
+// would cut the filter in half.
+func escapeFilterValue(value string) string {
+	value = strings.ReplaceAll(value, `"`, "")
+	value = strings.ReplaceAll(value, `\`, `\\`)
+	return strings.ReplaceAll(value, ":", `\:`)
+}
+
+// ffmpegCanRender renders one frame through filter so a filter this ffmpeg
+// cannot parse is caught here, not by a media server that then restarts on it
+// forever. A drawtext ffmpeg dislikes still exits 0 while complaining on
+// stderr, so any output at all counts as a refusal.
+func ffmpegCanRender(filter string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	command := exec.CommandContext(ctx, "ffmpeg", "-hide_banner", "-loglevel", "error",
+		"-f", "lavfi", "-i", "color=c=black:s=320x180:d=1",
+		"-vf", filter, "-frames:v", "1", "-f", "null", "-")
+	output, err := command.CombinedOutput()
+	complaint := strings.TrimSpace(string(output))
+	switch {
+	case err != nil && complaint != "":
+		return fmt.Errorf("%w: %s", err, complaint)
+	case err != nil:
+		return err
+	case complaint != "":
+		return errors.New(complaint)
+	}
+	return nil
+}
+
+// SourceSuffix names the untouched camera stream an overlaid stream reads
+// from. It exists so every overlaid name is a consumer of one source, and
+// therefore of one relay session, instead of opening its own tunnel.
+const SourceSuffix = "-source"
+
+// go2RTCOptions carries what the generated media-server configuration needs
+// beyond the cameras themselves.
+type go2RTCOptions struct {
+	EnableWebRTC    bool
+	WebRTCCandidate string
+
+	// OverlayFont enables the burnt-in clock and camera name when set to a
+	// TrueType font path. Empty, the default, leaves every frame untouched.
+	OverlayFont string
+
+	// VerifyOverlay renders one frame through a generated filter. Nil selects
+	// ffmpegCanRender. A filter this rejects disables the overlay rather than
+	// reaching the media server, which would otherwise restart on it forever.
+	VerifyOverlay func(filter string) error
+
+	Logger *slog.Logger
+}
+
+func (o go2RTCOptions) logger() *slog.Logger {
+	if o.Logger != nil {
+		return o.Logger
+	}
+	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
+
+func writeGo2RTCConfig(path string, registry cameraRegistry, opts go2RTCOptions) error {
+	enableWebRTC, webrtcCandidate := opts.EnableWebRTC, opts.WebRTCCandidate
+	overlays, err := buildOverlays(path, registry, opts)
+	if err != nil {
+		return err
+	}
 	config := go2RTCConfig{
 		Streams: make(map[string][]string, len(registry.Cameras)+1),
 		// go2rtc's API is unauthenticated and returns this very file, camera
@@ -361,10 +532,23 @@ func writeGo2RTCConfig(path string, registry cameraRegistry, enableWebRTC bool, 
 		userInfo := url.UserPassword(camera.RTSPUser, camera.RTSPPass).String()
 		source := fmt.Sprintf("rtsp://%s@%s/owner/streaming?accessToken=%s#rtsp/tcp#backchannel=0",
 			userInfo, camera.ListenAddr, url.QueryEscape(camera.AccessToken))
-		config.Streams[camera.StreamName] = []string{source}
+
+		// With an overlay every published name transcodes the one untouched
+		// source stream, so the two names of the first camera still cost a
+		// single relay session between them.
+		published := source
+		if filter, ok := overlays[camera.StreamName]; ok {
+			config.Streams[camera.StreamName+SourceSuffix] = []string{source}
+			// The quotes are go2rtc's, not Go's: it splits the command on
+			// spaces and strips one layer of quotes without unescaping
+			// anything, so the filter has to arrive verbatim.
+			published = fmt.Sprintf(`ffmpeg:%s%s#video=h264#audio=copy#raw=-vf "%s"`,
+				camera.StreamName, SourceSuffix, filter)
+		}
+		config.Streams[camera.StreamName] = []string{published}
 		config.Streams[camera.StreamName+MJPEGSuffix] = []string{"ffmpeg:" + camera.StreamName + "#video=mjpeg"}
 		if index == 0 {
-			config.Streams["vm65"] = []string{source}
+			config.Streams["vm65"] = []string{published}
 			config.Streams["vm65"+MJPEGSuffix] = []string{"ffmpeg:vm65#video=mjpeg"}
 		}
 	}

@@ -1,5 +1,5 @@
 name: Motorola Nursery Homeassistant Bridge
-version: "0.11.1"
+version: "0.12.0"
 slug: vm65_bridge
 image: ghcr.io/paradox101/{arch}-motorola-nursery-homeassistant-bridge
 description: Publishes compatible Motorola Nursery cameras through Magic WEB2 and optional go2rtc.
@@ -69,6 +69,7 @@ options:
   otp_code: ""
   control_host: "vrelay-de0.5gen.care"
   stream_backend: bundled
+  stream_overlay: false
   mqtt_discovery: false
   mqtt_host: core-mosquitto
   mqtt_port: 1883
@@ -94,6 +95,7 @@ schema:
   otp_code: password
   control_host: str
   stream_backend: list(bundled|external)
+  stream_overlay: bool
   mqtt_discovery: bool
   mqtt_host: str
   mqtt_port: port
