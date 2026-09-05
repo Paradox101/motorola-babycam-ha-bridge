@@ -49,7 +49,9 @@ FROM ghcr.io/home-assistant/${BUILD_ARCH}-base:3.24-2026.08.0
 # image proxy and leaves the snapshot entity permanently broken. The official
 # go2rtc image bundles ffmpeg; only the binary is copied from it, so it has to
 # be installed here.
-RUN apk add --no-cache ffmpeg
+# font-dejavu is what the optional burnt-in overlay draws with: ffmpeg's
+# drawtext filter needs a font file on disk, and the base image ships none.
+RUN apk add --no-cache ffmpeg font-dejavu
 COPY --from=build /out/vm65-bridge /usr/local/bin/vm65-bridge
 COPY --from=build /out/vm65-setup /usr/local/bin/vm65-setup
 COPY --from=go2rtc /usr/local/bin/go2rtc /usr/local/bin/go2rtc

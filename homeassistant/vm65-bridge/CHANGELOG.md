@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.12.0
+
+### Added
+
+- **An optional burnt-in overlay**: a clock in the top-left corner and the
+  camera name in the bottom-right, the way a camera with its own on-screen
+  display does it. Turn on `stream_overlay` in the add-on options. It is off by
+  default and stays that way on upgrade: the camera cannot draw this itself, so
+  the add-on re-encodes every frame to add it, which costs processing power on
+  the machine running Home Assistant. Every published name of a camera reads one
+  untouched source stream, so the overlay costs a single relay session; the
+  camera's audio is copied through rather than dropped; the camera name is
+  handed to ffmpeg in a file, so an apostrophe or colon in it is drawn instead
+  of silently eating the rest of the name; and the add-on renders one frame
+  through the filter before using it, falling back to the plain picture with a
+  log line if this build of ffmpeg will not draw it.
+
+### Fixed
+
+- **The concurrency cap could refuse clients that would have worked.** A
+  session occupies its slot from the moment it is accepted, including while its
+  relay is being dialled — and that dial, with retries and backoff, can run for
+  the better part of a minute. A media server gives up on a source after a few
+  seconds and reconnects, so an unreachable relay filled every slot with dials
+  for clients that had already left, and the reconnect burst that follows —
+  measured at eighteen connections inside a tenth of a second — was refused
+  outright. The bridge now reads the client while it dials, replays that
+  opening request toward the relay once the tunnel is up, and abandons the dial
+  as soon as the client goes away. A total dial budget of 25 seconds bounds the
+  case where the client does wait.
+- The per-camera session cap is raised from eight to sixteen. A media server
+  whose producer died reconnects every consumer at once, and that legitimate
+  burst was measured above eight; the cap is the last-resort guard, not a
+  throttle on normal bursts.
+
 ## 0.11.0
 
 ### Fixed

@@ -116,6 +116,7 @@ video keeps falling back to MSE and a copied RTSP URL resolves nowhere.
 | `otp_code` | Legacy unattended pairing code; leave empty and use the Web UI |
 | `control_host` | Magic relay control host |
 | `stream_backend` | `bundled` or `external` |
+| `stream_overlay` | Burn the date, time and camera name into the picture. Off by default: the camera has no on-screen display of its own, so the add-on re-encodes every frame to add one — see [The overlay](#the-overlay) |
 | `mqtt_discovery` | Publish Home Assistant camera discovery |
 | `mqtt_host`, `mqtt_port` | MQTT broker address |
 | `mqtt_username`, `mqtt_password` | Optional broker credentials |
@@ -208,6 +209,37 @@ the go2rtc Web UI.
 The page is reachable only through Ingress: it requires the Home Assistant user
 identity the Supervisor attaches to the request, and refuses connections from
 outside the Supervisor network. Only administrators see the add-on panel.
+
+## The overlay
+
+`stream_overlay` draws a clock in the top-left corner and the camera name in
+the bottom-right, the way a camera with its own on-screen display does. It is
+part of the picture: every viewer, every snapshot and every Home Assistant
+recording carries it.
+
+It is off by default, and that default is deliberate. The camera cannot draw
+this itself and the relay carries H.264 the add-on otherwise passes through
+untouched, so adding text means decoding and re-encoding every frame on the
+machine running Home Assistant. That costs processing power for as long as
+anything is watching, and adds a little delay. Turn it on when you need the
+stamp inside the video; leave it off if you only want to know the time while
+you are watching, which the Web UI already tells you.
+
+What the add-on does with it:
+
+- All published names of one camera read a single untouched source stream, so
+  the overlay costs one relay session, not one per name.
+- The camera's audio is copied through the re-encode, not dropped.
+- The camera name is handed to ffmpeg in a file rather than inside the filter,
+  so an apostrophe or a colon in the name is drawn instead of quietly eating
+  the rest of it.
+- Before the overlay reaches the media server the add-on renders one frame
+  through it. If that fails — no font installed, an ffmpeg without the drawtext
+  filter — the overlay is dropped and the log says so, and the picture is the
+  plain one rather than none at all.
+
+When running the container by hand, `VM65_OVERLAY_FONT` points at a different
+TrueType font. Set it and it is the only font tried.
 
 ## The Web UI
 

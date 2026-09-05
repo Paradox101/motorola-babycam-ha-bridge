@@ -8,6 +8,7 @@ setup() {
   # into the child shell. Set unconditionally: a ${VAR:-default} here would let
   # one test's value leak into the next.
   export TEST_BACKEND=bundled
+  export TEST_STREAM_OVERLAY=false
   export TEST_MQTT_DISCOVERY=false
   export TEST_REFRESH_INTERVAL=60
   export TEST_MQTT_SERVICE=false
@@ -30,6 +31,7 @@ setup() {
       otp_code|mqtt_username|mqtt_password) printf '' ;;
       control_host) printf 'relay.example.test' ;;
       stream_backend) printf '%s' "${TEST_BACKEND}" ;;
+      stream_overlay) printf '%s' "${TEST_STREAM_OVERLAY}" ;;
       mqtt_discovery) printf '%s' "${TEST_MQTT_DISCOVERY}" ;;
       mqtt_host) printf 'core-mosquitto' ;;
       mqtt_port) printf '1883' ;;
@@ -73,6 +75,30 @@ setup() {
   printf '#!/bin/sh\nprintf "bridge %%s\\n" "$*" >> "$CALL_LOG"\nsleep 0.1\nexit 7\n' > "${BATS_TEST_TMPDIR}/bin/vm65-bridge"
   printf '#!/bin/sh\nprintf "go2rtc %%s\\n" "$*" >> "$CALL_LOG"\nexec sleep 30\n' > "${BATS_TEST_TMPDIR}/bin/go2rtc"
   chmod +x "${BATS_TEST_TMPDIR}/bin/"*
+}
+
+@test "the overlay stays off unless it is asked for" {
+  run bash homeassistant/vm65-bridge/run.sh
+  run cat "$CALL_LOG"
+  [[ "$output" != *"-overlay-font"* ]]
+}
+
+@test "an overlay that is asked for is passed a font that exists" {
+  export TEST_STREAM_OVERLAY=true
+  export VM65_OVERLAY_FONT="${BATS_TEST_TMPDIR}/Font.ttf"
+  : > "${VM65_OVERLAY_FONT}"
+  run bash homeassistant/vm65-bridge/run.sh
+  run cat "$CALL_LOG"
+  [[ "$output" == *"-overlay-font ${VM65_OVERLAY_FONT}"* ]]
+}
+
+@test "an overlay without a font leaves the picture alone" {
+  export TEST_STREAM_OVERLAY=true
+  export VM65_OVERLAY_FONT="${BATS_TEST_TMPDIR}/absent.ttf"
+  run bash homeassistant/vm65-bridge/run.sh
+  run cat "$CALL_LOG"
+  [[ "$output" != *"-overlay-font"* ]]
+  [[ "$output" == *"setup "* ]]
 }
 
 @test "bundled mode generates config and supervises go2rtc" {

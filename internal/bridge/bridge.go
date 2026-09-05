@@ -12,6 +12,7 @@
 package bridge
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"errors"
@@ -44,11 +45,21 @@ const (
 	// vanished, independent of whether any data was expected.
 	DefaultKeepAlivePeriod = 30 * time.Second
 
-	// DefaultMaxSessions caps concurrent client connections per camera. One
-	// camera needs a couple (the live stream plus a snapshot fetch); anything
-	// beyond that is a client retrying faster than sessions end, and admitting
-	// those only piles up relay sessions the camera has to serve.
-	DefaultMaxSessions = 8
+	// DefaultMaxSessions caps concurrent client connections per camera. Steady
+	// state needs a couple (the live stream plus a snapshot fetch), but a media
+	// server whose producer just died reconnects every consumer at once, and a
+	// recovering camera was measured opening well over eight connections inside
+	// a tenth of a second. This is the last-resort guard against a client that
+	// reconnects faster than its sessions end — not a throttle on normal
+	// bursts, which the dial budget and the abandoned-dial path already bound.
+	DefaultMaxSessions = 16
+
+	// DefaultDialBudget bounds the whole relay-open sequence for one session,
+	// retries and backoff included. The retry loop alone can outlast any client
+	// waiting on it — a media server gives up in seconds — and a session still
+	// dialling holds its slot, so an unreachable relay would otherwise fill the
+	// concurrency cap with attempts nobody is waiting for any more.
+	DefaultDialBudget = 25 * time.Second
 )
 
 // ErrIdleTimeout reports a session dropped because the camera stopped sending.
@@ -106,6 +117,11 @@ type Config struct {
 	// attempt. Zero selects 1s.
 	DialBackoff time.Duration
 
+	// DialBudget bounds the entire relay-open sequence for one session, across
+	// all attempts and backoffs. Zero selects DefaultDialBudget; a negative
+	// value removes the bound and lets the retry sequence run to its end.
+	DialBudget time.Duration
+
 	// IdleTimeout drops a session that has gone this long without a byte from
 	// the camera. Zero selects DefaultIdleTimeout; a negative value disables
 	// the check and restores the previous behaviour of waiting forever.
@@ -136,6 +152,7 @@ type Bridge struct {
 	dialTimeout time.Duration
 	dialRetries int
 	dialBackoff time.Duration
+	dialBudget  time.Duration
 	idleTimeout time.Duration
 	keepAlive   time.Duration
 	maxSessions int
@@ -179,6 +196,10 @@ func New(cfg Config) (*Bridge, error) {
 	if dialBackoff == 0 {
 		dialBackoff = time.Second
 	}
+	dialBudget := cfg.DialBudget
+	if dialBudget == 0 {
+		dialBudget = DefaultDialBudget
+	}
 	idleTimeout := cfg.IdleTimeout
 	if idleTimeout == 0 {
 		idleTimeout = DefaultIdleTimeout
@@ -201,6 +222,7 @@ func New(cfg Config) (*Bridge, error) {
 		dialTimeout: dialTimeout,
 		dialRetries: dialRetries,
 		dialBackoff: dialBackoff,
+		dialBudget:  dialBudget,
 		idleTimeout: idleTimeout,
 		keepAlive:   keepAlive,
 		maxSessions: maxSessions,
@@ -331,8 +353,20 @@ func (b *Bridge) handle(ctx context.Context, client net.Conn) {
 		log.Info("client disconnected")
 	}()
 
-	tunnel, err := b.dialWithRetry(ctx, log)
+	// Watch the client for the duration of the dial. An RTSP client sends its
+	// first request as soon as the socket is up and then waits, and media
+	// servers give up in seconds while a dial with retries runs far longer.
+	// Without this the bridge kept dialling for a peer that had already left,
+	// and that session held its slot the whole time — enough of them and the
+	// concurrency cap starts refusing clients that would have worked.
+	watch := watchClient(client)
+	tunnel, err := b.dial(ctx, log, watch.gone)
+	pending := watch.stop()
 	if err != nil {
+		if watch.left() {
+			log.Info("client left before the relay was ready", "err", err)
+			return
+		}
 		log.Error("relay dial failed", "err", err)
 		return
 	}
@@ -357,7 +391,17 @@ func (b *Bridge) handle(ctx context.Context, client net.Conn) {
 		}
 	}()
 
+	// Whatever the client sent while the relay was being dialled goes first, so
+	// the tunnel carries its request stream in the order it was written.
+	if len(pending) > 0 {
+		if _, err := tunnel.Write(pending); err != nil {
+			log.Error("could not forward the request the client sent while dialling", "err", err)
+			return
+		}
+	}
+
 	fromClient, fromRelay, idled := pipe(client, tunnel, b.idleTimeout, log)
+	fromClient += int64(len(pending))
 	log.Info("relay session closed", "bytes_to_relay", fromClient, "bytes_from_camera", fromRelay)
 	// An idle drop after the camera did stream is a relay or camera that went
 	// away without closing the socket. Left alone that session would block in
@@ -378,6 +422,100 @@ func (b *Bridge) handle(ctx context.Context, client net.Conn) {
 			"This is expected without a valid 5GenCare-authorized session "+
 			"(fresh SID / device token / stream accessToken). See docs/bridge.md",
 			"bytes_to_relay", fromClient)
+	}
+}
+
+// dial opens a relay session under two bounds the retry loop does not have on
+// its own: a budget for the whole attempt sequence, and the client still being
+// there to receive the result. Either one ending the dial frees this session's
+// slot instead of letting it run out the full retry sequence.
+func (b *Bridge) dial(ctx context.Context, log *slog.Logger, gone <-chan struct{}) (*magic.Tunnel, error) {
+	dialCtx, cancel := context.WithCancel(ctx)
+	if b.dialBudget > 0 {
+		dialCtx, cancel = context.WithTimeout(ctx, b.dialBudget)
+	}
+	defer cancel()
+
+	stop := make(chan struct{})
+	defer close(stop)
+	go func() {
+		select {
+		case <-gone:
+			cancel()
+		case <-stop:
+		}
+	}()
+
+	return b.dialWithRetry(dialCtx, log)
+}
+
+// clientWatch reads from a client while its relay session is being dialled. It
+// keeps what the client sent, for replay toward the relay once the tunnel is
+// up, and reports a client that went away in the meantime.
+type clientWatch struct {
+	conn net.Conn
+	done chan struct{} // closed once the reader has stopped
+	gone chan struct{} // closed when the client went away on its own
+
+	mu       sync.Mutex
+	buf      bytes.Buffer
+	stopping bool
+}
+
+func watchClient(conn net.Conn) *clientWatch {
+	w := &clientWatch{conn: conn, done: make(chan struct{}), gone: make(chan struct{})}
+	go w.read()
+	return w
+}
+
+func (w *clientWatch) read() {
+	defer close(w.done)
+	buf := make([]byte, 4096)
+	for {
+		n, err := w.conn.Read(buf)
+		if n > 0 {
+			w.mu.Lock()
+			w.buf.Write(buf[:n])
+			w.mu.Unlock()
+		}
+		if err != nil {
+			w.mu.Lock()
+			stopping := w.stopping
+			w.mu.Unlock()
+			// The deadline stop sets to wake this read is our own doing, not a
+			// client that left.
+			if !stopping {
+				close(w.gone)
+			}
+			return
+		}
+	}
+}
+
+// stop ends the watch and returns every byte the client sent while it ran. The
+// read deadline it uses to wake the reader is cleared again, so the session's
+// own copy loop starts from a clean connection.
+func (w *clientWatch) stop() []byte {
+	w.mu.Lock()
+	w.stopping = true
+	w.mu.Unlock()
+
+	_ = w.conn.SetReadDeadline(time.Now())
+	<-w.done
+	_ = w.conn.SetReadDeadline(time.Time{})
+
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.buf.Bytes()
+}
+
+// left reports whether the client went away while the watch ran.
+func (w *clientWatch) left() bool {
+	select {
+	case <-w.gone:
+		return true
+	default:
+		return false
 	}
 }
 

@@ -35,10 +35,20 @@ seconds, or at shutdown. The idle timeout exists because a relay whose peer
 vanished stops sending without closing its socket: nothing errors, both copy
 directions block, and the session would otherwise hold two sockets and a
 goroutine forever while still counting as active. TCP keepalive on both sockets
-catches the same fault from the other side. A camera accepts at most eight
-concurrent sessions and logs a warning when it refuses one, so a client that
-reconnects faster than its sessions end cannot pile up relay sessions the
-camera has to serve.
+catches the same fault from the other side.
+
+A session occupies its slot from the moment it is accepted, so the relay-open
+sequence is bounded too. A media server gives up on a source after a few
+seconds and reconnects, while a dial with retries and backoff runs far longer;
+a session dialling for a client that already left is pure waste. So the bridge
+reads the client while it dials — the opening request is replayed toward the
+relay once the tunnel is up — and abandons the dial the moment that client
+goes away. A total dial budget of 25 seconds bounds the case where the client
+does wait. Only then does the concurrency cap apply: at most sixteen sessions
+per camera, with a logged warning for each refusal. It is the last-resort guard
+against a client reconnecting faster than its sessions end, not a throttle on
+the burst a media server produces when it reconnects all of its consumers at
+once.
 
 Bind raw bridge listeners to loopback unless a trusted external media server
 must connect. The raw endpoint adds no authentication beyond the opaque camera
