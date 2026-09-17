@@ -1,5 +1,42 @@
 # Changelog
 
+## 0.13.1
+
+### Fixed
+
+- **A camera the relay cannot reach no longer produces a night of retries and
+  a log that names a parser.** When a camera is powered off, rebooting or
+  reconnecting to Wi-Fi, Motorola's relay answers the discovery request with a
+  non-positive connection number: it holds no registration for the camera. The
+  bridge reported that as `parse app response: connection number must be
+  positive`, retried it twice per client with backoff — 528 retries in one
+  log, not one of which succeeded — and let every reconnecting media server
+  put the same question to the relay again within seconds. A refusal is now
+  its own error, `magic.RelayRefusedError`, carrying the response line the
+  relay sent; it is logged once per session as `relay refused the session: the
+  camera is not connected to the Motorola relay`, at warning level, with what
+  to check; it is not retried; and for ten seconds after one, new clients wait
+  instead of asking again — a client that leaves during the wait ends its
+  session without the relay hearing about it, and one that stays gets a real
+  attempt once the wait is over. `bridge.Config.RefusalCooldown` sets the
+  wait; a negative value disables it.
+- **Every other rejected relay response now quotes the line it rejected.** The
+  one four-field response seen in the field could not be interpreted afterwards
+  because the error only said how many fields it had.
+- **The "camera did not attach" warning no longer blames the credentials
+  alone.** A relay that opens the session but carries no camera byte is, on a
+  camera that streamed a minute earlier, a camera dropping off the network —
+  it precedes the relay refusing sessions outright — so the warning now names
+  both causes and what to check for each.
+- **A camera added to the account after start now gets its Home Assistant
+  camera entity fed.** The frame publisher kept the camera list it was started
+  with, so the entity of a camera that arrived through a credential refresh
+  never received a frame, and a camera that left kept being fetched. It reads
+  the current list on every publish.
+- **A snapshot that go2rtc answered with an empty body is reported as that**
+  — `go2rtc returned an empty response instead of an image: the camera stream
+  produced no frame` — rather than as `returned "" instead of an image`.
+
 ## 0.13.0
 
 ### Removed

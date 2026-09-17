@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.13.1
+
+### Fixed
+
+- A camera that is powered off, rebooting or reconnecting to Wi-Fi no longer
+  fills the log with `connection number must be positive` retries. The relay's
+  refusal is now logged for what it is — `relay refused the session: the
+  camera is not connected to the Motorola relay` — with what to check, it is
+  not retried, and the add-on waits ten seconds before asking the relay again
+  for the next player or snapshot. The picture comes back by itself once the
+  camera is. See **When the camera is not reachable through the relay** in the
+  documentation.
+- A camera added to the account after start now gets its camera entity fed
+  with frames; before, only the cameras present at start did.
+- Clearer log lines for a camera that answers the relay but sends no video, and
+  for a snapshot the media server answered with nothing.
+
 ## 0.13.0
 
 ### Removed

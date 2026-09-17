@@ -60,6 +60,16 @@ const (
 	// dialling holds its slot, so an unreachable relay would otherwise fill the
 	// concurrency cap with attempts nobody is waiting for any more.
 	DefaultDialBudget = 25 * time.Second
+
+	// DefaultRefusalCooldown is how long the bridge leaves the relay alone
+	// after it refused to open a session. A refusal (magic.RelayRefusedError)
+	// is the relay saying it holds no registration for the camera — powered
+	// off, rebooting or between Wi-Fi reconnects — and that answer does not
+	// change within seconds: measured over five hours of refusals, no retry a
+	// second or two later ever succeeded. Meanwhile a media server whose
+	// consumers are waiting reconnects the moment a dial fails, and every one
+	// of those would put the same question to the relay again.
+	DefaultRefusalCooldown = 10 * time.Second
 )
 
 // ErrIdleTimeout reports a session dropped because the camera stopped sending.
@@ -136,6 +146,11 @@ type Config struct {
 	// selects DefaultMaxSessions; a negative value removes the cap.
 	MaxSessions int
 
+	// RefusalCooldown is how long after the relay refused to open a session
+	// the next dials wait before asking it again. Zero selects
+	// DefaultRefusalCooldown; a negative value disables the wait.
+	RefusalCooldown time.Duration
+
 	// Logger receives structured lifecycle logs. Zero uses slog.Default.
 	Logger *slog.Logger
 
@@ -147,16 +162,17 @@ type Config struct {
 // Bridge accepts local TCP connections and tunnels each one to the camera
 // through an independent Magic WEB2 relay session.
 type Bridge struct {
-	cfg         Config
-	magicUUID   string
-	dialTimeout time.Duration
-	dialRetries int
-	dialBackoff time.Duration
-	dialBudget  time.Duration
-	idleTimeout time.Duration
-	keepAlive   time.Duration
-	maxSessions int
-	log         *slog.Logger
+	cfg             Config
+	magicUUID       string
+	dialTimeout     time.Duration
+	dialRetries     int
+	dialBackoff     time.Duration
+	dialBudget      time.Duration
+	idleTimeout     time.Duration
+	keepAlive       time.Duration
+	maxSessions     int
+	refusalCooldown time.Duration
+	log             *slog.Logger
 
 	listener net.Listener
 	sessions int64 // total accepted, atomic
@@ -165,6 +181,9 @@ type Bridge struct {
 	mu      sync.Mutex
 	conns   map[net.Conn]struct{}
 	closing bool
+	// refusedAt is when the relay last refused a session; zero until it first
+	// does. The cooldown is measured from it.
+	refusedAt time.Time
 }
 
 // New validates cfg and derives the stable magicUuid, but does not bind a
@@ -212,22 +231,27 @@ func New(cfg Config) (*Bridge, error) {
 	if maxSessions == 0 {
 		maxSessions = DefaultMaxSessions
 	}
+	refusalCooldown := cfg.RefusalCooldown
+	if refusalCooldown == 0 {
+		refusalCooldown = DefaultRefusalCooldown
+	}
 	log := cfg.Logger
 	if log == nil {
 		log = slog.Default()
 	}
 	return &Bridge{
-		cfg:         cfg,
-		magicUUID:   magicUUID,
-		dialTimeout: dialTimeout,
-		dialRetries: dialRetries,
-		dialBackoff: dialBackoff,
-		dialBudget:  dialBudget,
-		idleTimeout: idleTimeout,
-		keepAlive:   keepAlive,
-		maxSessions: maxSessions,
-		log:         log,
-		conns:       make(map[net.Conn]struct{}),
+		cfg:             cfg,
+		magicUUID:       magicUUID,
+		dialTimeout:     dialTimeout,
+		dialRetries:     dialRetries,
+		dialBackoff:     dialBackoff,
+		dialBudget:      dialBudget,
+		idleTimeout:     idleTimeout,
+		keepAlive:       keepAlive,
+		maxSessions:     maxSessions,
+		refusalCooldown: refusalCooldown,
+		log:             log,
+		conns:           make(map[net.Conn]struct{}),
 	}, nil
 }
 
@@ -373,6 +397,18 @@ func (b *Bridge) handle(ctx context.Context, client net.Conn) {
 			log.Info("client left before the relay was ready", "err", err)
 			return
 		}
+		// A refusal is the relay's answer, not a fault in the bridge or the
+		// network, and it names the thing to check. It is logged as such,
+		// once per session, rather than as a failed dial with a parser error.
+		var refused *magic.RelayRefusedError
+		if errors.As(err, &refused) {
+			log.Warn("relay refused the session: the camera is not connected to the Motorola relay. "+
+				"It is powered off, rebooting or reconnecting to Wi-Fi; check the camera. "+
+				"The bridge asks the relay again when the next client connects, after a short cooldown",
+				"response", refused.Response,
+				"cooldown", b.refusalCooldown)
+			return
+		}
 		log.Error("relay dial failed", "err", err)
 		return
 	}
@@ -419,14 +455,17 @@ func (b *Bridge) handle(ctx context.Context, client net.Conn) {
 			"bytes_from_camera", fromRelay)
 	}
 	// A session that opened but never carried a single camera byte is the exact
-	// signature of a relay session without an attached camera peer. In the wild
-	// this means the 5GenCare-authorized session is missing or expired; make
-	// that legible instead of a silent empty stream. Skipped on context cancel,
-	// where the empty read is our own shutdown.
+	// signature of a relay session without an attached camera peer. The relay
+	// accepted the session, so it still held a registration for the camera,
+	// but the camera did not answer its call: it is dropping off the network,
+	// or the credentials no longer authorize this session. In the field the
+	// first is the common one — it precedes the relay refusing sessions
+	// outright by minutes — so say both. Skipped on context cancel, where the
+	// empty read is our own shutdown.
 	if fromRelay == 0 && ctx.Err() == nil {
-		log.Warn("relay opened but camera sent no data; the camera did not attach. "+
-			"This is expected without a valid 5GenCare-authorized session "+
-			"(fresh SID / device token / stream accessToken). See docs/bridge.md",
+		log.Warn("relay opened but the camera sent no data; the camera did not attach to the session. "+
+			"Either the camera is losing its connection (check its power and Wi-Fi), "+
+			"or the credentials no longer authorize it (a fresh SID / device token; see docs/bridge.md)",
 			"bytes_to_relay", fromClient)
 	}
 }
@@ -459,7 +498,43 @@ func (b *Bridge) dial(ctx context.Context, log *slog.Logger, gone <-chan struct{
 		}
 	}()
 
+	// After a refusal the relay is left alone for the cooldown. The wait runs
+	// under the same bounds as the dial itself, so a client that gives up in
+	// the meantime ends its session at once, and a client that stays gets a
+	// real attempt once the cooldown has passed — not a replay of the old
+	// answer, since the camera may have come back in between.
+	if wait := b.refusalWait(); wait > 0 {
+		log.Info("the relay refused this camera a moment ago; waiting before asking it again",
+			"wait", wait.Round(time.Millisecond))
+		select {
+		case <-dialCtx.Done():
+			return nil, dialCtx.Err()
+		case <-time.After(wait):
+		}
+	}
+
 	return b.dialWithRetry(dialCtx, log)
+}
+
+// refusalWait reports how much of the cooldown after the last refusal is left.
+func (b *Bridge) refusalWait() time.Duration {
+	if b.refusalCooldown <= 0 {
+		return 0
+	}
+	b.mu.Lock()
+	refusedAt := b.refusedAt
+	b.mu.Unlock()
+	if refusedAt.IsZero() {
+		return 0
+	}
+	return b.refusalCooldown - time.Since(refusedAt)
+}
+
+// noteRefusal starts the cooldown.
+func (b *Bridge) noteRefusal() {
+	b.mu.Lock()
+	b.refusedAt = time.Now()
+	b.mu.Unlock()
 }
 
 // clientWatch reads from a client while its relay session is being dialled. It
@@ -565,6 +640,16 @@ func (b *Bridge) dialWithRetry(ctx context.Context, log *slog.Logger) (*magic.Tu
 		lastErr = err
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
+		}
+		// The retry loop is for transport faults — a timeout, a reset, a relay
+		// that went quiet. A refusal is a complete answer: asking the same
+		// question a second later got the same reply every one of the 528
+		// times it was measured, and each attempt is another round trip to
+		// the relay for a client whose media server is about to give up.
+		var refused *magic.RelayRefusedError
+		if errors.As(err, &refused) {
+			b.noteRefusal()
+			return nil, err
 		}
 	}
 	return nil, lastErr

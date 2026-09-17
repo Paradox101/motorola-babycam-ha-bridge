@@ -208,8 +208,12 @@ func run(cfg appconfig.Config, logger *slog.Logger) error {
 		go mirrorStateToMQTT(ctx, publisher.service, runtime, healthState, 5*time.Second)
 		// Feeding the camera entity is what puts a camera in Home Assistant
 		// without anyone adding an integration by hand.
+		// The camera list is read live from the Web UI's source, which a
+		// credential reload updates: a camera the account gained after start
+		// otherwise never got a frame published, and one that left kept
+		// getting fetched.
 		if cfg.CameraRefreshInterval > 0 && snapshots != nil {
-			go publishCameraFrames(ctx, publisher.service, snapshots, registry, cfg.CameraRefreshInterval, logger)
+			go publishCameraFrames(ctx, publisher.service, snapshots, web.source.frameStreams, cfg.CameraRefreshInterval, logger)
 		}
 	}
 
@@ -521,6 +525,9 @@ type uiSource struct {
 	mu          sync.RWMutex
 	streamURLs  map[string]string
 	streamNames map[string]string
+	// frames maps each camera's device identifier — the one its MQTT entity
+	// is published under — to the go2rtc stream its frames come from.
+	frames map[string]string
 
 	// go2rtcURL is the media server this add-on owns, restarted through its own
 	// loopback API. allowMediaRestart and allowCredentialRefresh say whether
@@ -553,6 +560,7 @@ func newUISource(cfg appconfig.Config, registry app.Registry, runtime *app.Runti
 func (u *uiSource) setRegistry(cfg appconfig.Config, registry app.Registry) {
 	names := make(map[string]string, len(registry.Cameras))
 	urls := make(map[string]string, len(registry.Cameras))
+	frames := make(map[string]string, len(registry.Cameras))
 	for index, camera := range registry.Cameras {
 		key := camera.Credentials.DeviceUDID
 		if key == "" {
@@ -560,15 +568,33 @@ func (u *uiSource) setRegistry(cfg appconfig.Config, registry app.Registry) {
 		}
 		// The first camera keeps the historical vm65 alias in go2rtc, so that
 		// is the name the player has to ask for.
-		names[key] = publishedStreamName(registry, camera, index)
+		published := publishedStreamName(registry, camera, index)
+		names[key] = published
 		if url, err := discoveryStreamURL(cfg.StreamURL, camera.StreamName, index == 0); err == nil {
 			urls[key] = url
+		}
+		if camera.Credentials.DeviceUDID != "" {
+			frames[camera.Credentials.DeviceUDID] = published
 		}
 	}
 	u.mu.Lock()
 	u.streamNames = names
 	u.streamURLs = urls
+	u.frames = frames
 	u.mu.Unlock()
+}
+
+// frameStreams reports, per camera identifier, the go2rtc stream that feeds
+// its camera entity — for the registry as it stands now, not as it was at
+// start.
+func (u *uiSource) frameStreams() map[string]string {
+	u.mu.RLock()
+	defer u.mu.RUnlock()
+	streams := make(map[string]string, len(u.frames))
+	for id, stream := range u.frames {
+		streams[id] = stream
+	}
+	return streams
 }
 
 // stream reports the go2rtc stream name and RTSP URL of one camera.
@@ -678,14 +704,9 @@ func signalParentRefresh() error {
 // publishCameraFrames feeds the Home Assistant camera entity. Each frame costs
 // a still from go2rtc, which pulls it over the relay, so the interval is the
 // user's to choose and zero turns the whole thing off.
-func publishCameraFrames(ctx context.Context, service *mqttdiscovery.Service, snapshots *snapshot.Cache, registry app.Registry, interval time.Duration, logger *slog.Logger) {
-	streams := make(map[string]string, len(registry.Cameras))
-	for index, camera := range registry.Cameras {
-		streams[camera.Credentials.DeviceUDID] = publishedStreamName(registry, camera, index)
-	}
-
+func publishCameraFrames(ctx context.Context, service *mqttdiscovery.Service, snapshots *snapshot.Cache, streams func() map[string]string, interval time.Duration, logger *slog.Logger) {
 	publish := func() {
-		for id, stream := range streams {
+		for id, stream := range streams() {
 			image, err := snapshots.Frame(ctx, stream)
 			if err != nil {
 				logger.Debug("no frame for the camera entity yet", "camera", stream, "err", err)

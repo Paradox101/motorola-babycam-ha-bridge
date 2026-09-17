@@ -50,6 +50,21 @@ against a client reconnecting faster than its sessions end, not a throttle on
 the burst a media server produces when it reconnects all of its consumers at
 once.
 
+The relay can also simply say no. Its answer to the `app` discovery request
+carries a connection number, and the native client accepts a response only when
+that number is positive; a non-positive one is the relay reporting that it holds
+no registration for the camera — powered off, rebooting or between Wi-Fi
+reconnects. The bridge reports that as `relay refused the session`, with the
+response line, and treats it as the complete answer it is: the dial is not
+retried (over five hours of refusals against the real relay, no retry a second
+later ever succeeded), and for ten seconds afterwards new clients wait instead
+of asking the relay the same question — a media server with waiting consumers
+reconnects the instant a dial fails, and every reconnect would otherwise be
+another request to a relay that just said no. A client that leaves during that
+wait ends its session without the relay hearing about it; one that stays gets a
+real attempt once the cooldown has passed, because the camera may be back. The
+cooldown is `Config.RefusalCooldown`; a negative value disables it.
+
 Bind raw bridge listeners to loopback unless a trusted external media server
 must connect. The raw endpoint adds no authentication beyond the opaque camera
 RTSP URL. See [architecture](architecture.md), [operations](operations.md) and

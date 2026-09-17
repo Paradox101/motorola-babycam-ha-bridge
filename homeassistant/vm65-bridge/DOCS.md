@@ -208,6 +208,28 @@ server** restarts it in place; the relay tunnels stay up and only playback comes
 back. Repeated failures in a row do end the add-on, so the Supervisor can start
 it cleanly.
 
+## When the camera is not reachable through the relay
+
+Video reaches the add-on through Motorola's relay, and the relay only connects
+you to a camera that is currently registered with it. When the camera is
+powered off, rebooting or reconnecting to Wi-Fi, the relay refuses to open a
+session, and the log says so:
+
+```text
+relay refused the session: the camera is not connected to the Motorola relay ...
+```
+
+That is the relay's answer, not a fault in the add-on, and refreshing
+credentials or restarting the add-on does not change it. Check the camera —
+its power, its Wi-Fi, whether the Motorola app can see it — and the picture
+returns by itself as soon as the camera is back: the add-on asks the relay
+again whenever a player or a snapshot needs the stream, leaving a few seconds
+between attempts so a camera that is off does not turn into a stream of
+requests. A camera that answers the relay but then sends nothing is logged as
+`the camera did not attach to the session`; on a camera that streamed fine a
+moment ago that is the same problem — a camera dropping off the network —
+seen a minute earlier.
+
 ## Pairing
 
 Until the account is paired, the Ingress page is the pairing form rather than

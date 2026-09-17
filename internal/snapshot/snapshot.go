@@ -427,7 +427,14 @@ func (c *Cache) fetch(source string) ([]byte, error) {
 		detail, _ := io.ReadAll(io.LimitReader(response.Body, 256))
 		return nil, fmt.Errorf("go2rtc returned %d: %s", response.StatusCode, strings.TrimSpace(string(detail)))
 	}
-	if contentType := response.Header.Get("Content-Type"); !strings.HasPrefix(contentType, "image/") {
+	contentType := response.Header.Get("Content-Type")
+	if contentType == "" {
+		// A 200 with no content type is a 200 with no body: go2rtc answered
+		// before the camera produced a frame. It reads better as what it is
+		// than as `returned "" instead of an image`.
+		return nil, errors.New("go2rtc returned an empty response instead of an image: the camera stream produced no frame")
+	}
+	if !strings.HasPrefix(contentType, "image/") {
 		return nil, fmt.Errorf("go2rtc returned %q instead of an image", contentType)
 	}
 	// One byte over the cap, so a frame that hit the limit is reported instead

@@ -67,29 +67,64 @@ type AppResponse struct {
 	Mode             int    // final field; runtime-confirmed as the connection mode
 }
 
+// RelayRefusedError is the control host declining to open a session. The
+// native parser accepts a response only when num > 0, so a non-positive num is
+// how the relay says no. Observed against the real relay (2026-09-17) it came
+// in runs lasting minutes to hours, each ending with the camera's connection
+// numbers starting over at 1 — the camera had dropped off the relay and
+// registered again. It means "no camera to connect you to", not "try again in
+// a second": in 528 measured retries within the same session, not one
+// succeeded.
+type RelayRefusedError struct {
+	ConnectionNumber int
+	// Response is the response line as received, without its terminator and
+	// cut to a readable length, so a reason the relay sends along reaches the
+	// log. It is formatted with %q wherever it is printed.
+	Response string
+}
+
+func (e *RelayRefusedError) Error() string {
+	return fmt.Sprintf("relay refused the session (response %q): the camera is not connected to the relay", e.Response)
+}
+
+// maxDescribedResponse bounds how much of an unexpected response line an error
+// message repeats. The eight-field form is well under this.
+const maxDescribedResponse = 160
+
+func describeResponse(text string) string {
+	if len(text) > maxDescribedResponse {
+		return text[:maxDescribedResponse] + "..."
+	}
+	return text
+}
+
 func ParseAppResponse(data []byte) (AppResponse, error) {
 	var result AppResponse
 	text := strings.TrimRight(string(data), "\r\n")
 	fields := strings.Split(text, " ")
 	if len(fields) < 2 || !strings.EqualFold(fields[0], "app") {
-		return result, errors.New("response must begin with the app keyword")
+		return result, fmt.Errorf("response must begin with the app keyword (response %q)", describeResponse(text))
 	}
 
 	num, err := strconv.Atoi(fields[1])
 	if err != nil {
-		return result, fmt.Errorf("connection number: %w", err)
+		return result, fmt.Errorf("connection number (response %q): %w", describeResponse(text), err)
 	}
-	// The native parser requires num > 0 before accepting the response.
+	// The native parser requires num > 0 before accepting the response. A
+	// refusal is reported as its own type: it is the relay's answer, not a
+	// transport fault, and callers treat the two differently.
 	if num <= 0 {
-		return result, errors.New("connection number must be positive")
+		return result, &RelayRefusedError{ConnectionNumber: num, Response: describeResponse(text)}
 	}
 	result.ConnectionNumber = num
 
 	// Only the eight-field form is a fully reconstructed WEB2 relay response.
 	// Shorter forms are acknowledged by the native parser but were not part of
-	// the measured session, so they are rejected here rather than guessed.
+	// the measured session, so they are rejected here rather than guessed. The
+	// line itself is kept in the error: the one four-field response seen in
+	// the field could not be interpreted afterwards because it was not.
 	if len(fields) != 8 {
-		return result, fmt.Errorf("unsupported response field count %d; only the eight-field WEB2 form is reconstructed", len(fields))
+		return result, fmt.Errorf("unsupported response field count %d (response %q); only the eight-field WEB2 form is reconstructed", len(fields), describeResponse(text))
 	}
 
 	result.StreamHost = fields[2]
