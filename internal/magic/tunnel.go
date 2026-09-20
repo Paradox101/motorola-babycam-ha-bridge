@@ -141,9 +141,15 @@ func Dial(ctx context.Context, cfg TunnelConfig) (*Tunnel, error) {
 		return nil, tunnel.fail("parse app response", err)
 	}
 	tunnel.Response = response
-	if response.Mode != ConnectionModeWEB2 {
-		return nil, tunnel.fail("relay selected non-WEB2 mode",
-			fmt.Errorf("mode %d is not reconstructed", response.Mode))
+	// The four-field form names no mode and echoes no target port: the relay
+	// session is opened in the mode and toward the port the request asked for.
+	targetPort := cfg.TargetPort
+	if response.Fields == 8 {
+		if response.Mode != ConnectionModeWEB2 {
+			return nil, tunnel.fail("relay selected non-WEB2 mode",
+				fmt.Errorf("mode %d is not reconstructed", response.Mode))
+		}
+		targetPort = response.TargetPort
 	}
 
 	streamAddr := net.JoinHostPort(response.StreamHost, strconv.Itoa(RelayStreamPort))
@@ -161,7 +167,7 @@ func Dial(ctx context.Context, cfg TunnelConfig) (*Tunnel, error) {
 	open := RelayOpen{
 		Version:          RelayOpenVersion2,
 		ConnectionNumber: response.ConnectionNumber,
-		TargetPort:       response.TargetPort,
+		TargetPort:       targetPort,
 		MagicUUID:        cfg.MagicUUID,
 		SessionName:      cfg.SessionName,
 	}

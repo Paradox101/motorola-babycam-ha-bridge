@@ -48,23 +48,37 @@ func (r AppRequest) MarshalText() ([]byte, error) {
 }
 
 // AppResponse is the Magic control host's answer to an AppRequest. The native
-// parser (FUN_00017cf0) accepts four forms by whitespace-field count; only the
-// eight-field form drives a WEB2 relay session and is the one reconstructed
-// here in full. Fields below are runtime-confirmed against the same session's
-// relay-open frame and 9901/direct flows.
+// parser (FUN_00017cf0) accepts four forms by whitespace-field count. Two of
+// them have come from the real relay and are reconstructed here:
 //
 //	app <num> <streamHost> <controlHost> <targetPort> <directIP> <directPort> <mode>
+//	app <num> <streamHost> <controlHost>
+//
+// The eight-field form is the measured WEB2 session's; its fields are
+// runtime-confirmed against the same session's relay-open frame and
+// 9901/direct flows. The four-field form was seen in the field (2026-09-20)
+// with num 1 — the first connection number after the camera registered with
+// the relay again — and carries only the relay hosts: no LAN endpoint for a
+// direct attempt, no echoed target port and no mode. The native parser fills
+// the hosts from it and opens the relay stream port toward the stream host
+// just the same, so a relay session is opened with the target port the request
+// asked for; nothing else about it is different.
 //
 // The response is newline-terminated on the wire; the terminator is not part of
 // any field.
 type AppResponse struct {
+	// Fields is the number of whitespace fields the response had: 8 or 4.
+	Fields           int
 	ConnectionNumber int    // "num"; reused as RelayOpen.ConnectionNumber
 	StreamHost       string // relay stream host; RelayStreamPort is opened toward it
 	ControlHost      string // relay control hostname
-	TargetPort       int    // echoed camera target port
-	DirectIP         string // camera LAN endpoint for the tryDirect attempt
-	DirectPort       int    // camera LAN endpoint port
-	Mode             int    // final field; runtime-confirmed as the connection mode
+
+	// The eight-field form alone carries the fields below; the four-field form
+	// leaves them zero.
+	TargetPort int    // echoed camera target port
+	DirectIP   string // camera LAN endpoint for the tryDirect attempt
+	DirectPort int    // camera LAN endpoint port
+	Mode       int    // final field; runtime-confirmed as the connection mode
 }
 
 // RelayRefusedError is the control host declining to open a session. The
@@ -88,7 +102,7 @@ func (e *RelayRefusedError) Error() string {
 }
 
 // maxDescribedResponse bounds how much of an unexpected response line an error
-// message repeats. The eight-field form is well under this.
+// message repeats. The reconstructed forms are well under this.
 const maxDescribedResponse = 160
 
 func describeResponse(text string) string {
@@ -118,17 +132,29 @@ func ParseAppResponse(data []byte) (AppResponse, error) {
 	}
 	result.ConnectionNumber = num
 
-	// Only the eight-field form is a fully reconstructed WEB2 relay response.
-	// Shorter forms are acknowledged by the native parser but were not part of
-	// the measured session, so they are rejected here rather than guessed. The
-	// line itself is kept in the error: the one four-field response seen in
-	// the field could not be interpreted afterwards because it was not.
-	if len(fields) != 8 {
-		return result, fmt.Errorf("unsupported response field count %d (response %q); only the eight-field WEB2 form is reconstructed", len(fields), describeResponse(text))
+	// The two-field and three-field forms are acknowledged by the native
+	// parser but have not come from the relay, so they are rejected here
+	// rather than guessed. The line itself is kept in the error: the first
+	// four-field response seen in the field could not be interpreted
+	// afterwards because it was not.
+	switch len(fields) {
+	case 4, 8:
+	default:
+		return result, fmt.Errorf("unsupported response field count %d (response %q); only the four-field and eight-field forms are reconstructed", len(fields), describeResponse(text))
 	}
-
+	result.Fields = len(fields)
 	result.StreamHost = fields[2]
 	result.ControlHost = fields[3]
+	if err := validateHost("stream host", result.StreamHost); err != nil {
+		return result, err
+	}
+	if err := validateHost("control host", result.ControlHost); err != nil {
+		return result, err
+	}
+	if len(fields) == 4 {
+		return result, nil
+	}
+
 	if result.TargetPort, err = parsePort(fields[4], "target port"); err != nil {
 		return result, err
 	}
@@ -138,12 +164,6 @@ func ParseAppResponse(data []byte) (AppResponse, error) {
 	}
 	if result.Mode, err = strconv.Atoi(fields[7]); err != nil {
 		return result, fmt.Errorf("mode: %w", err)
-	}
-	if err := validateHost("stream host", result.StreamHost); err != nil {
-		return result, err
-	}
-	if err := validateHost("control host", result.ControlHost); err != nil {
-		return result, err
 	}
 	if err := validateHost("direct IP", result.DirectIP); err != nil {
 		return result, err

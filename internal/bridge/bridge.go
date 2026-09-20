@@ -182,8 +182,14 @@ type Bridge struct {
 	conns   map[net.Conn]struct{}
 	closing bool
 	// refusedAt is when the relay last refused a session; zero until it first
-	// does. The cooldown is measured from it.
+	// does. The cooldown is measured from it. refusal is that answer.
 	refusedAt time.Time
+	refusal   *magic.RelayRefusedError
+
+	// probe admits one session at a time to put the question to the relay
+	// once a cooldown has passed; the other sessions that waited out the same
+	// cooldown take its answer instead of asking again.
+	probe chan struct{}
 }
 
 // New validates cfg and derives the stable magicUuid, but does not bind a
@@ -252,6 +258,7 @@ func New(cfg Config) (*Bridge, error) {
 		refusalCooldown: refusalCooldown,
 		log:             log,
 		conns:           make(map[net.Conn]struct{}),
+		probe:           make(chan struct{}, 1),
 	}, nil
 }
 
@@ -400,6 +407,15 @@ func (b *Bridge) handle(ctx context.Context, client net.Conn) {
 		// A refusal is the relay's answer, not a fault in the bridge or the
 		// network, and it names the thing to check. It is logged as such,
 		// once per session, rather than as a failed dial with a parser error.
+		// A session that took the answer another session got while it waited
+		// says so instead of repeating the warning.
+		var shared *sharedRefusal
+		if errors.As(err, &shared) {
+			log.Info("the relay refused this camera while this session waited; not asking it again",
+				"response", shared.refused.Response,
+				"refused_ago", shared.age.Round(time.Millisecond))
+			return
+		}
 		var refused *magic.RelayRefusedError
 		if errors.As(err, &refused) {
 			log.Warn("relay refused the session: the camera is not connected to the Motorola relay. "+
@@ -416,10 +432,15 @@ func (b *Bridge) handle(ctx context.Context, client net.Conn) {
 	if err := tunnel.SetKeepAlive(b.keepAlive); err != nil {
 		log.Debug("could not set relay keepalive", "err", err)
 	}
-	log.Info("relay session open",
+	opened := []any{
 		"stream_host", tunnel.Response.StreamHost,
 		"connection_num", tunnel.Response.ConnectionNumber,
-		"mode", tunnel.Response.Mode)
+		"mode", tunnel.Response.Mode,
+	}
+	if tunnel.Response.Fields < 8 {
+		opened = append(opened, "answer", "short: the relay named no target port, direct endpoint or mode")
+	}
+	log.Info("relay session open", opened...)
 
 	// When the outer context is cancelled, drop both ends so the copies return.
 	stop := make(chan struct{})
@@ -503,39 +524,86 @@ func (b *Bridge) dial(ctx context.Context, log *slog.Logger, gone <-chan struct{
 	// the meantime ends its session at once, and a client that stays gets a
 	// real attempt once the cooldown has passed — not a replay of the old
 	// answer, since the camera may have come back in between.
-	if wait := b.refusalWait(); wait > 0 {
-		log.Info("the relay refused this camera a moment ago; waiting before asking it again",
-			"wait", wait.Round(time.Millisecond))
-		select {
-		case <-dialCtx.Done():
-			return nil, dialCtx.Err()
-		case <-time.After(wait):
-		}
+	wait, seen := b.refusalWait()
+	if wait <= 0 {
+		return b.dialWithRetry(dialCtx, log)
+	}
+	log.Info("the relay refused this camera a moment ago; waiting before asking it again",
+		"wait", wait.Round(time.Millisecond))
+	select {
+	case <-dialCtx.Done():
+		return nil, dialCtx.Err()
+	case <-time.After(wait):
 	}
 
+	// The sessions that waited do not all ask at once. A media server whose
+	// read timeout is shorter than the cooldown reconnects while its previous
+	// connection is still held, so several sessions reach the end of the same
+	// cooldown together — three at a time in the field — and each would put
+	// the question to the relay again. One of them asks. The others wait for
+	// its answer: a refusal is theirs too, without another round trip, and a
+	// success sends them on to dial for themselves, since every client needs a
+	// relay session of its own.
+	select {
+	case b.probe <- struct{}{}:
+	case <-dialCtx.Done():
+		return nil, dialCtx.Err()
+	}
+	defer func() { <-b.probe }()
+	if refused := b.refusalSince(seen); refused != nil {
+		return nil, refused
+	}
 	return b.dialWithRetry(dialCtx, log)
 }
 
-// refusalWait reports how much of the cooldown after the last refusal is left.
-func (b *Bridge) refusalWait() time.Duration {
+// refusalWait reports how much of the cooldown after the last refusal is left,
+// and when that refusal was, for refusalSince.
+func (b *Bridge) refusalWait() (time.Duration, time.Time) {
 	if b.refusalCooldown <= 0 {
-		return 0
+		return 0, time.Time{}
 	}
 	b.mu.Lock()
 	refusedAt := b.refusedAt
 	b.mu.Unlock()
 	if refusedAt.IsZero() {
-		return 0
+		return 0, refusedAt
 	}
-	return b.refusalCooldown - time.Since(refusedAt)
+	return b.refusalCooldown - time.Since(refusedAt), refusedAt
 }
 
-// noteRefusal starts the cooldown.
-func (b *Bridge) noteRefusal() {
+// refusalSince returns the relay's refusal if it gave one after the refusal at
+// seen — that is, to another session while this one waited — and nil if the
+// last refusal is still the one this session waited out.
+func (b *Bridge) refusalSince(seen time.Time) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.refusal == nil || !b.refusedAt.After(seen) {
+		return nil
+	}
+	return &sharedRefusal{refused: b.refusal, age: time.Since(b.refusedAt)}
+}
+
+// noteRefusal starts the cooldown and keeps the answer for the sessions
+// waiting on it.
+func (b *Bridge) noteRefusal(refused *magic.RelayRefusedError) {
 	b.mu.Lock()
 	b.refusedAt = time.Now()
+	b.refusal = refused
 	b.mu.Unlock()
 }
+
+// sharedRefusal is a refusal the relay gave another session while this one was
+// waiting for its turn to ask. It unwraps to that refusal.
+type sharedRefusal struct {
+	refused *magic.RelayRefusedError
+	age     time.Duration
+}
+
+func (e *sharedRefusal) Error() string {
+	return fmt.Sprintf("%v (the relay's answer to another session %s ago)", e.refused, e.age.Round(time.Millisecond))
+}
+
+func (e *sharedRefusal) Unwrap() error { return e.refused }
 
 // clientWatch reads from a client while its relay session is being dialled. It
 // keeps what the client sent, for replay toward the relay once the tunnel is
@@ -648,7 +716,7 @@ func (b *Bridge) dialWithRetry(ctx context.Context, log *slog.Logger) (*magic.Tu
 		// the relay for a client whose media server is about to give up.
 		var refused *magic.RelayRefusedError
 		if errors.As(err, &refused) {
-			b.noteRefusal()
+			b.noteRefusal(refused)
 			return nil, err
 		}
 	}

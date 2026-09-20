@@ -32,6 +32,7 @@ func TestParseAppResponseEightFieldWEB2(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := AppResponse{
+		Fields:           8,
 		ConnectionNumber: 48,
 		StreamHost:       "203.0.113.10",
 		ControlHost:      "vrelay-example.5gen.care",
@@ -42,6 +43,29 @@ func TestParseAppResponseEightFieldWEB2(t *testing.T) {
 	}
 	if got != want {
 		t.Fatalf("response mismatch:\n got %+v\nwant %+v", got, want)
+	}
+}
+
+// The four-field form is what the relay sent, five times in one morning
+// (2026-09-20), each time with connection number 1 — the camera had just
+// registered again. It names the relay hosts and nothing else; a session opened
+// from it uses the target port the request asked for.
+func TestParseAppResponseFourFieldRelayOnly(t *testing.T) {
+	got, err := ParseAppResponse([]byte("app 1 165.232.73.94 vrelay-de0.5gen.care\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := AppResponse{
+		Fields:           4,
+		ConnectionNumber: 1,
+		StreamHost:       "165.232.73.94",
+		ControlHost:      "vrelay-de0.5gen.care",
+	}
+	if got != want {
+		t.Fatalf("response mismatch:\n got %+v\nwant %+v", got, want)
+	}
+	if _, err := ParseAppResponse([]byte("app 1 165.232.73.94 bad\x7fhost\n")); err == nil {
+		t.Fatal("a four-field response with an unprintable control host was accepted")
 	}
 }
 
@@ -72,10 +96,11 @@ func TestAppResponseNumberFeedsRelayOpen(t *testing.T) {
 func TestParseAppResponseRejectsUnprovenForms(t *testing.T) {
 	for _, line := range []string{
 		"app 0 203.0.113.10 vrelay-example.5gen.care 6667 192.0.2.20 77 2", // num must be > 0
-		"app 48",                        // two-field form: acknowledged natively, not reconstructed
-		"app 48 203.0.113.10 host.only", // four-field form
-		"nope 48 a b 1 c 2 3",           // wrong keyword
-		"app x 203.0.113.10 h 1 c 2 3",  // non-numeric num
+		"app 48",              // two-field form: acknowledged natively, not reconstructed
+		"app 48 203.0.113.10", // three-field form
+		"app 48 203.0.113.10 host 6667 192.0.2.20", // neither four nor eight fields
+		"nope 48 a b 1 c 2 3",                      // wrong keyword
+		"app x 203.0.113.10 h 1 c 2 3",             // non-numeric num
 	} {
 		if _, err := ParseAppResponse([]byte(line)); err == nil {
 			t.Fatalf("expected rejection for %q", line)
@@ -111,12 +136,12 @@ func TestParseAppResponseReportsARefusal(t *testing.T) {
 	}
 }
 
-// Every other rejection names the line it rejected: the four-field response the
-// relay sent once in the field was unexplainable afterwards precisely because
-// the error only said how many fields it had.
+// Every other rejection names the line it rejected: the first four-field
+// response the relay sent in the field was unexplainable afterwards precisely
+// because the error only said how many fields it had.
 func TestParseAppResponseErrorsQuoteTheResponse(t *testing.T) {
 	for _, line := range []string{
-		"app 48 203.0.113.10 host.only",
+		"app 48 203.0.113.10 host 6667 192.0.2.20",
 		"app 48",
 		"nope 48 a b 1 c 2 3",
 		"app x 203.0.113.10 h 1 c 2 3",
@@ -152,7 +177,7 @@ func TestParseAppResponseBoundsTheQuotedResponse(t *testing.T) {
 	}
 	long := "app 0 " + strings.Repeat("y", 100) + "\x01\xff"
 	_, err = ParseAppResponse([]byte(long))
-	if message := err.Error(); strings.ContainsAny(message, "\x01\xff") {
+	if message := err.Error(); strings.Contains(message, "\x01") || strings.Contains(message, "\xff") {
 		t.Fatalf("control bytes reached the message: %q", message)
 	}
 }

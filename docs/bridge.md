@@ -63,7 +63,20 @@ reconnects the instant a dial fails, and every reconnect would otherwise be
 another request to a relay that just said no. A client that leaves during that
 wait ends its session without the relay hearing about it; one that stays gets a
 real attempt once the cooldown has passed, because the camera may be back. The
-cooldown is `Config.RefusalCooldown`; a negative value disables it.
+cooldown is `Config.RefusalCooldown`; a negative value disables it. The clients
+that waited out the same cooldown do not all ask at once: a media server whose
+read timeout is shorter than the cooldown reconnects while its previous
+connection is still held, so several sessions reach the end of the cooldown
+together. One of them asks the relay; a refusal is the others' answer too,
+logged as `the relay refused this camera while this session waited`, and a
+success sends them on to open relay sessions of their own.
+
+The relay's positive answer comes in two forms. The eight-field one names the
+relay hosts, echoes the target port, gives the camera's LAN endpoint and the
+connection mode. The four-field one, which the relay sends right after the
+camera has registered again, names only the relay hosts; the bridge opens the
+session from it with the target port it asked for and logs it as a short
+answer in `relay session open`.
 
 Bind raw bridge listeners to loopback unless a trusted external media server
 must connect. The raw endpoint adds no authentication beyond the opaque camera

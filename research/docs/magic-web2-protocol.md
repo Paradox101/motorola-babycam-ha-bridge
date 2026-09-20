@@ -65,6 +65,8 @@ app <num> <streamHost> <controlHost> <targetPort> <directIp> <directPort> <mode>
 
 Bron: `FUN_00017cf0`, outbound formatstring `app %s %d %d %s\n` op `0x15324`, responseformats op `0x13794`, `0x14eba`, `0x141a0` en `0x146e8`. De parser vereist dat het eerste veld case-insensitive `app` is en dat `num > 0`. Bij de achtveldenvariant controleert hij het geretourneerde targetpoortveld, vult stream-/controlhost en directe endpointvelden en stelt de streamrelaypoort in op `9901` (`0x26ad`).
 
+**Runtime-gezien (bridge-log 2026-09-20):** de vierveldenvariant `app 1 165.232.73.94 vrelay-de0.5gen.care` kwam vijf keer voor, telkens met `num` = 1 — direct nadat de camera zich opnieuw bij de relay had geregistreerd — en tussen `app 0`-weigeringen en sessies zonder aangehaakte camera in. Ze noemt alleen stream- en controlhost: geen targetpoort, direct endpoint of mode. De bridge opent er sinds 0.13.2 een relaysessie uit met de aangevraagde targetpoort (`internal/magic/control_discovery.go`, `AppResponse.Fields`); of de camera in die toestand ook daadwerkelijk aanhaakt is nog niet gemeten.
+
 ### Runtime-bewezen (capture 2026-08-27)
 
 Een verse app-start met tcpdump op de emulator legde het volledige plaintext `app`-request/response-paar op TCP/8800 vast. Het request is byte-voor-byte `app <magicUuid> <targetPort> 2 <sessionName>\n`. De response is de **achtveldenvariant** en correleert byte-perfect met dezelfde sessie:
