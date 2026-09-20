@@ -177,7 +177,7 @@ func TestParseAppResponseBoundsTheQuotedResponse(t *testing.T) {
 	}
 	long := "app 0 " + strings.Repeat("y", 100) + "\x01\xff"
 	_, err = ParseAppResponse([]byte(long))
-	if message := err.Error(); strings.ContainsAny(message, "\x01\xff") {
+	if message := err.Error(); strings.Contains(message, "\x01") || strings.Contains(message, "\xff") {
 		t.Fatalf("control bytes reached the message: %q", message)
 	}
 }
