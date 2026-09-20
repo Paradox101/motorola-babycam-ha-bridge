@@ -64,7 +64,7 @@ Statusdatum: 2026-08-27. Dit document scheidt waarnemingen strikt in **PROVEN**,
 ### Magic WEB2
 
 - ~~Runtime-invulling van het voorafgaande Magic `app ...` controlresponse op controlpoort 8800 en de semantiek van het laatste achtveldenveld.~~ **Opgelost (capture 2026-08-27):** achtveldenvariant runtime-bewezen; laatste veld = connection mode (2 = WEB2). Zie `docs/magic-web2-protocol.md` en `internal/magic/control_discovery.go`.
-- Foutcodes en alternatieve direct/LAN-controlresponses (kortere responsevormen nog niet gecaptured).
+- Foutcodes en alternatieve direct/LAN-controlresponses. De vierveldenvariant `app <num> <streamHost> <controlHost>` is in het veld gezien (bridge-log 2026-09-20, `num` = 1 direct na herregistratie van de camera) en wordt sinds 0.13.2 als relay-only antwoord geaccepteerd; de twee- en drieveldenvormen zijn nog niet gecaptured.
 - Reconnect- en closegedrag bij een verbroken relay.
 - Callbackstructuren zijn nog niet volledig getypeerd, maar blokkeren de native Go-route niet meer.
 

@@ -225,7 +225,8 @@ its power, its Wi-Fi, whether the Motorola app can see it — and the picture
 returns by itself as soon as the camera is back: the add-on asks the relay
 again whenever a player or a snapshot needs the stream, leaving a few seconds
 between attempts so a camera that is off does not turn into a stream of
-requests. A camera that answers the relay but then sends nothing is logged as
+requests, and players that arrive during that pause share one request. A
+camera that answers the relay but then sends nothing is logged as
 `the camera did not attach to the session`; on a camera that streamed fine a
 moment ago that is the same problem — a camera dropping off the network —
 seen a minute earlier.

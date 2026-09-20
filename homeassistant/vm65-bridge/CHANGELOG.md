@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.13.2
+
+### Fixed
+
+- A camera that has just come back on the relay no longer fails its first
+  sessions with `unsupported response field count 4`. The relay's short answer
+  right after the camera registers again is now understood and opens the
+  stream, instead of being rejected and retried three times.
+- Players that reconnect while the camera is off no longer ask the relay three
+  times per cooldown: one asks, the others take its answer.
+
 ## 0.13.1
 
 ### Fixed

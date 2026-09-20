@@ -5,6 +5,7 @@ import (
 	"context"
 	"log/slog"
 	"net"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -237,6 +238,207 @@ func (h *refusingControlHost) dial(_ context.Context, _, _ string) (net.Conn, er
 
 // requests counts the app requests answered so far.
 func (h *refusingControlHost) requests() int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.count
+}
+
+// TestBridgeWaitingClientsShareOneQuestion covers what a restart showed with a
+// camera that was off: go2rtc's read timeout is shorter than the cooldown, so
+// it reconnected while its previous connection was still held, three sessions
+// reached the end of the same cooldown together, and all three asked the relay
+// — three refusals per cooldown instead of one. Now one of them asks and the
+// others take its answer.
+func TestBridgeWaitingClientsShareOneQuestion(t *testing.T) {
+	relay := startRefusingControlHost(t)
+	rec := &recordingHandler{}
+
+	b, err := New(Config{
+		ListenAddr:      "127.0.0.1:0",
+		Credentials:     testCreds(),
+		Dial:            relay.dial,
+		DialBackoff:     30 * time.Second,
+		RefusalCooldown: 300 * time.Millisecond,
+		Logger:          slog.New(rec),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Listen(); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = b.Serve(ctx) }()
+
+	first, err := net.Dial("tcp", b.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Close()
+	waitFor(t, func() bool {
+		_, active := b.Stats()
+		return relay.requests() == 1 && active == 0
+	})
+
+	// Three clients arrive inside the cooldown and all stay.
+	for i := 0; i < 3; i++ {
+		client, err := net.Dial("tcp", b.Addr().String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer client.Close()
+	}
+	waitFor(t, func() bool { return rec.count(slog.LevelInfo, "waiting before asking it again") == 3 })
+	waitFor(t, func() bool {
+		total, active := b.Stats()
+		return total == 4 && active == 0
+	})
+
+	if got := relay.requests(); got != 2 {
+		t.Fatalf("the relay saw %d app requests; want 2: one before the cooldown and one for the three sessions that waited it out", got)
+	}
+	if got := rec.count(slog.LevelWarn, "relay refused the session"); got != 2 {
+		t.Fatalf("%d sessions logged a refusal of their own, want 2", got)
+	}
+	if got := rec.count(slog.LevelInfo, "while this session waited"); got != 2 {
+		t.Fatalf("%d sessions took the shared answer, want 2", got)
+	}
+}
+
+// TestBridgeWaitingClientsDialOnceTheRelayAccepts is the other half: when the
+// one session that asked gets a relay session, the camera is back, and the
+// sessions that waited with it dial for themselves — each client needs a relay
+// session of its own.
+func TestBridgeWaitingClientsDialOnceTheRelayAccepts(t *testing.T) {
+	relay := startRelayRefusingFirst(t)
+	rec := &recordingHandler{}
+
+	b, err := New(Config{
+		ListenAddr:      "127.0.0.1:0",
+		Credentials:     testCreds(),
+		Dial:            relay.dial,
+		DialBackoff:     30 * time.Second,
+		RefusalCooldown: 300 * time.Millisecond,
+		Logger:          slog.New(rec),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Listen(); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = b.Serve(ctx) }()
+
+	first, err := net.Dial("tcp", b.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Close()
+	waitFor(t, func() bool {
+		_, active := b.Stats()
+		return relay.requests() == 1 && active == 0
+	})
+
+	for i := 0; i < 3; i++ {
+		client, err := net.Dial("tcp", b.Addr().String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer client.Close()
+	}
+	waitFor(t, func() bool { return rec.count(slog.LevelInfo, "waiting before asking it again") == 3 })
+	waitFor(t, func() bool { return rec.count(slog.LevelInfo, "relay session open") == 3 })
+	if got := relay.requests(); got != 4 {
+		t.Fatalf("the relay saw %d app requests; want 4: the refused one and one per session that waited", got)
+	}
+	if rec.has(slog.LevelInfo, "while this session waited") {
+		t.Fatal("a session took a refusal as its answer after the relay had accepted")
+	}
+}
+
+// count reports how many records at level carry substr in their message.
+func (h *recordingHandler) count(level slog.Level, substr string) int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	n := 0
+	for _, r := range h.records {
+		if r.Level == level && strings.Contains(r.Message, substr) {
+			n++
+		}
+	}
+	return n
+}
+
+// relayRefusingFirst refuses the first app request and opens a relay session
+// for every later one, with no camera attached: the stream is accepted, its
+// relay-open frame read, and then closed.
+type relayRefusingFirst struct {
+	listener net.Listener
+	mu       sync.Mutex
+	count    int
+	wg       sync.WaitGroup
+}
+
+func startRelayRefusingFirst(t *testing.T) *relayRefusingFirst {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	host, _, _ := net.SplitHostPort(listener.Addr().String())
+	h := &relayRefusingFirst{listener: listener}
+	t.Cleanup(func() {
+		_ = listener.Close()
+		h.wg.Wait()
+	})
+	h.wg.Add(1)
+	go func() {
+		defer h.wg.Done()
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			h.wg.Add(1)
+			go func() {
+				defer h.wg.Done()
+				defer conn.Close()
+				reader := bufio.NewReader(conn)
+				// Control and stream connections arrive on the same
+				// listener; an app request starts with "app", a relay-open
+				// frame with its version letter.
+				if lead, err := reader.Peek(1); err != nil || lead[0] != 'a' {
+					_, _ = readRelayOpenFrame(reader)
+					return
+				}
+				if _, err := reader.ReadBytes('\n'); err != nil {
+					return
+				}
+				h.mu.Lock()
+				h.count++
+				n := h.count
+				h.mu.Unlock()
+				if n == 1 {
+					_, _ = conn.Write([]byte("app 0\n"))
+					return
+				}
+				_, _ = conn.Write([]byte("app 9 " + host + " relay.test 6667 192.0.2.20 77 2\n"))
+				// Hold the control side until the bridge closes it.
+				_, _ = reader.ReadByte()
+			}()
+		}
+	}()
+	return h
+}
+
+func (h *relayRefusingFirst) dial(_ context.Context, _, _ string) (net.Conn, error) {
+	return net.Dial("tcp", h.listener.Addr().String())
+}
+
+func (h *relayRefusingFirst) requests() int {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return h.count

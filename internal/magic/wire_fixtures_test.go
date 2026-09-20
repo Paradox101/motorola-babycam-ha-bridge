@@ -102,6 +102,7 @@ func TestWireFixtures(t *testing.T) {
 		t.Fatalf("parse app response fixture: %v", err)
 	}
 	wantResp := AppResponse{
+		Fields:           8,
 		ConnectionNumber: 34,
 		StreamHost:       "relay-stream.example",
 		ControlHost:      "relay-control.example",

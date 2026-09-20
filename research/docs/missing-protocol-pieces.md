@@ -46,6 +46,7 @@ Known:
 - De volledige TCP/9901-capture decodeert naar geldige RTSP, SDP en interleaved RTP.
 - Voorafgaand relay-discoveryrequest: `app <magicUuid> <targetPort> 2 <sessionName>\n`; native default controlpoort 8800.
 - **PROVEN (capture 2026-08-27):** de `app`-controlresponse is de achtveldenvariant `app <num> <streamHost> <controlHost> <targetPort> <directIp> <directPort> <mode>`. `num` matcht het relay-open connectionnummer, `streamHost` matcht de 9901-tunnelbestemming, `directIp` matcht de mislukte directe poging, en het laatste veld is de **connection mode** (2 = WEB2). Go-codec: `internal/magic/control_discovery.go`.
+- **Gezien (bridge-log 2026-09-20):** de vierveldenvariant `app <num> <streamHost> <controlHost>`, met `num` = 1 direct na herregistratie van de camera. Zonder targetpoort, direct endpoint en mode; de bridge opent er een relaysessie uit met de aangevraagde targetpoort.
 
 Unknown:
 

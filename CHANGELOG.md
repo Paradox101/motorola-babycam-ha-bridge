@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.13.2
+
+### Fixed
+
+- **The relay's four-field answer opens a session instead of being rejected
+  and retried.** Right after a camera registers with the relay again, the
+  relay answers the discovery request with `app 1 <streamHost> <controlHost>`:
+  the relay hosts and nothing else — no echoed target port, no LAN endpoint,
+  no mode. The bridge knew only the eight-field form, reported the answer as
+  `unsupported response field count 4`, and retried it twice with backoff:
+  three requests to the relay for one client, and no session at the moment the
+  camera had just come back. The four-field form is now parsed
+  (`magic.AppResponse.Fields` says which form arrived), the relay session is
+  opened from it with the target port the request asked for, and `relay
+  session open` notes the short answer.
+- **Clients that wait out the same refusal cooldown no longer all ask the
+  relay at once.** A media server whose read timeout is shorter than the
+  cooldown reconnects while its previous connection is still held, so three
+  sessions reached the end of every cooldown together and each put the same
+  question to the relay — three refusals per cooldown instead of one, and
+  three relay sessions for one player once the camera was back. One session
+  asks now; a refusal is the others' answer too, logged once as `the relay
+  refused this camera while this session waited`, and a success sends them
+  on to dial for themselves.
+
 ## 0.13.1
 
 ### Fixed
